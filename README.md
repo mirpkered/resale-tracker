@@ -29,12 +29,11 @@ The SQL isolation check is in `supabase/tests/rls.sql`; run it against a local S
 
 ## GitHub Pages deployment
 
-The repository is not connected to GitHub yet. Once it is created as `mirpkered/resale-tracker`:
+The public repository is [`mirpkered/resale-tracker`](https://github.com/mirpkered/resale-tracker), with GitHub Pages configured for Actions deployment at <https://mirpkered.github.io/resale-tracker/>. To publish later updates:
 
-1. Push the `main` branch to that repository.
-2. In repository **Settings → Pages → Build and deployment**, select **GitHub Actions**.
-3. Add `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` as repository Actions **Variables** (these are public frontend values; do not use the service-role key). Leaving them unset deploys the clearly labeled demo experience.
-4. The workflow `.github/workflows/deploy.yml` runs lint, TypeScript validation, unit tests, and a production build on pushes and pull requests; a successful push to `main` deploys the artifact to GitHub Pages.
+1. Push commits to the `main` branch.
+2. Add `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` as repository Actions **Variables** when Supabase is configured (these are public frontend values; do not use the service-role key). Leaving them unset deploys the clearly labeled demo experience.
+3. The workflow `.github/workflows/deploy.yml` runs lint, TypeScript validation, unit tests, and a production build on pushes and pull requests; a successful push to `main` deploys the artifact to GitHub Pages.
 
 The expected URL is <https://mirpkered.github.io/resale-tracker/>. No deployment is claimed until the repository and Pages workflow are configured and a successful run completes.
 
