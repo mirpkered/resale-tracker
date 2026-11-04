@@ -30,6 +30,17 @@ export function validateData(data) {
   for (const key of ['lots', 'items', 'sales', 'expenses', 'credit', 'platforms']) assert(Array.isArray(data[key]), `Data is missing ${key}.`)
   const lots = uniqueIds(data.lots, 'lot'), items = uniqueIds(data.items, 'item'); uniqueIds(data.sales, 'sale')
   uniqueIds(data.expenses, 'expense'); uniqueIds(data.credit, 'store-credit transaction'); uniqueIds(data.platforms, 'platform')
+  if (data.purchaseGroups !== undefined) uniqueIds(data.purchaseGroups, 'purchase group')
+  if (data.units !== undefined) uniqueIds(data.units, 'inventory unit')
+  if (data.ledgerTransactions !== undefined) {
+    uniqueIds(data.ledgerTransactions, 'ledger transaction')
+    const external = new Set()
+    for (const transaction of data.ledgerTransactions) {
+      const key = `${transaction.externalSource}:${transaction.externalId}`
+      assert(transaction.externalSource && transaction.externalId && !external.has(key), `Missing or duplicate ledger external ID: ${key}`); external.add(key)
+      for (const field of ['grossCents', 'feesCents', 'expensesCents', 'receivedCents', 'creditCents', 'expectedCents']) cents(transaction[field], `Ledger ${field}`)
+    }
+  }
   const allocations = new Map()
   for (const lot of data.lots) { cents(lot.purchaseCents, 'Lot purchase cost'); cents(lot.expensesCents, 'Lot expenses') }
   for (const item of data.items) {
@@ -37,10 +48,15 @@ export function validateData(data) {
     assert(Number.isSafeInteger(item.quantity) && item.quantity >= 0, `Item ${item.id} quantity is invalid.`)
     if (item.lotId !== null) { assert(lots.has(item.lotId), `Item ${item.id} references a missing purchase lot.`); allocations.set(item.lotId, (allocations.get(item.lotId) ?? 0) + item.costCents) }
   }
+  for (const unit of data.units ?? []) assert(items.has(unit.itemId), `Inventory unit ${unit.id} references a missing item.`)
+  const unitById = new Map((data.units ?? []).map((unit) => [unit.id, unit]))
+  const soldUnits = new Set()
+  const groups = new Set((data.purchaseGroups ?? []).map((group) => group.id))
+  for (const lot of data.lots) if (lot.reportingGroupId) assert(groups.has(lot.reportingGroupId), `Purchase lot ${lot.id} references a missing reporting group.`)
   for (const lot of data.lots) assert((allocations.get(lot.id) ?? 0) <= lot.purchaseCents + lot.expensesCents, `Item allocations exceed purchase lot ${lot.id}.`)
   for (const sale of data.sales) {
     for (const key of ['grossCents', 'feeCents', 'shippingCents', 'otherExpenseCents', 'receivedCents', 'refundCents', 'creditCents']) cents(sale[key], `Sale ${sale.id} ${key}`)
-    for (const line of sale.lines ?? []) { assert(items.has(line.itemId), `Sale ${sale.id} references missing item ${line.itemId}.`); assert(Number.isSafeInteger(line.quantity) && line.quantity > 0, `Sale ${sale.id} line quantity is invalid.`); cents(line.allocatedCostCents, 'Allocated acquisition cost'); cents(line.proceedsCents ?? 0, 'Allocated proceeds') }
+    for (const line of sale.lines ?? []) { assert(items.has(line.itemId), `Sale ${sale.id} references missing item ${line.itemId}.`); assert(Number.isSafeInteger(line.quantity) && line.quantity > 0, `Sale ${sale.id} line quantity is invalid.`); assert(!line.unitIds || line.unitIds.length === line.quantity, `Sale ${sale.id} unit IDs do not match its quantity.`); cents(line.allocatedCostCents, 'Allocated acquisition cost'); cents(line.proceedsCents ?? 0, 'Allocated proceeds'); for (const [index, unitId] of (line.unitIds ?? []).entries()) { const unit = unitById.get(unitId); assert(unit && unit.itemId === line.itemId, `Sale ${sale.id} references an invalid inventory unit ${unitId}.`); if (index >= (line.returnedQuantity ?? 0)) { assert(!soldUnits.has(unitId), `Inventory unit ${unitId} appears in multiple unreturned sales.`); soldUnits.add(unitId) } } }
   }
   for (const expense of data.expenses) cents(expense.amountCents, 'Expense')
   for (const transaction of data.credit) cents(transaction.amountCents, 'Store credit amount')

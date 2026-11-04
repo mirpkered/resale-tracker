@@ -1,6 +1,6 @@
 # Resale Tracker
 
-Personal resale inventory and profit tracking. Version 0.2 uses React, TypeScript, and Vite for GitHub Pages, with a private GitHub repository and an explicitly started GitHub Actions workflow for durable storage. This is not a Mirpworks application.
+Personal resale inventory and profit tracking. Version 0.3 uses React, TypeScript, and Vite for GitHub Pages, with a private GitHub repository and an explicitly started GitHub Actions workflow for durable storage. This is not a Mirpworks application.
 
 ## Storage and security
 
@@ -49,7 +49,11 @@ The former `supabase/` SQL migrations and RLS test are retained as historical v0
 
 ## Import, accounting, and migration
 
-Listing conversation imports remain manual and use the app's versioned JSON/CSV preview with stable source IDs and duplicate detection. There is no automatic access to ChatGPT Project conversations. Existing verified resale records can be imported later; the data repository starts empty and no sample or migration-reference records were inserted. Preserve separate purchase lots (including the Halloween purchase and both Goodwill hauls) during any future migration.
+Listing conversation imports remain manual and use the app's versioned JSON/CSV preview with stable source IDs and duplicate detection. There is no automatic access to ChatGPT Project conversations.
+
+For historical records, use **Reconciliation** and the empty `public/examples/migration-template.v1.json`. The documented ChatGPT-compatible format is in `public/docs/migration-schema-v1.md`, with a formal JSON Schema at `public/docs/resale-migration.schema.v1.json`. Each imported field carries a verification status; the preview identifies new/imported, existing, conflicting, ambiguous, and unverified values, and shows the before/after financial totals. User changes are preserved unless that record's conflict is explicitly approved. Create a personal workspace first; migration approval changes only local browser data. Then use the separate GitHub sync steps to save the approved records. Production data starts empty; no sample or migration-reference records were inserted. Preserve separate purchase lots (including the Halloween purchase and both Goodwill hauls); optional purchase groups only aggregate reports and never merge costs.
+
+Duplicate inventory quantities retain individual copy IDs, and sale/return records reference those units. Import transaction types distinguish paid cash sales, buyback payouts, store credit, rewards, other expenses, and pending offers. Confirmed cash is reported separately from expected proceeds, and credit/rewards are not cash.
 
 The app continues to use integer cents for money, separates gross sales from confirmed net cash, tracks store credit separately, distinguishes unsold asking value from realized revenue, and reports lot-level and consolidated metrics. Local persistence is not multi-device synchronization; use the manual repository procedure to back up and confirm changes.
 
@@ -62,4 +66,4 @@ npm test
 npm run build
 ```
 
-Tests include cents and lot reconciliation, paid/unpaid proceeds, partial and bundled lines, refunds, status transitions, import duplicate previews, storage serialization, demo isolation, revision conflicts, retry idempotency, failed validation recovery, and backup restoration.
+Tests include cents and lot reconciliation, paid/unpaid proceeds, partial and bundled lines, refunds, status transitions, import duplicate previews, storage serialization, demo isolation, revision conflicts, retry idempotency, failed validation recovery, backup restoration, grouped-purchase totals, migration matching, estimated values, pending offers, copy units, and migration financial reconciliation.

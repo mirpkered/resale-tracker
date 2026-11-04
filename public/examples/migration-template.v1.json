@@ -1,0 +1,12 @@
+{
+  "format": "resale-tracker-migration",
+  "schemaVersion": "1.0",
+  "source": {
+    "id": "replace-with-stable-source-id",
+    "name": "Verified records from resale conversations"
+  },
+  "purchaseGroups": [],
+  "purchaseLots": [],
+  "inventoryItems": [],
+  "transactions": []
+}

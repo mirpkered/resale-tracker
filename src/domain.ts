@@ -1,15 +1,21 @@
 export type ItemStatus = 'acquired' | 'draft' | 'active' | 'reserved' | 'awaiting_payment' | 'awaiting_fulfillment' | 'completed' | 'returned' | 'traded' | 'donated' | 'disposed'
 export type PaymentStatus = 'unpaid' | 'partial' | 'paid' | 'refunded'
 export type PlatformKind = 'sales' | 'trade_in' | 'rewards'
+export type VerificationStatus = 'confirmed' | 'estimated' | 'suggested' | 'pending' | 'unknown'
+export type FieldVerification = Record<string, VerificationStatus>
+export type LedgerTransactionType = 'cash_sale' | 'buyback_payout' | 'store_credit' | 'reward' | 'pending_offer' | 'other_expense'
 
-export interface PurchaseLot { id: string; name: string; date: string; source: string; purchaseCents: number; expensesCents: number; notes?: string }
-export interface InventoryItem { id: string; title: string; description?: string; category: string; quantity: number; originalQuantity?: number; lotId: string | null; costCents: number; askingCents: number; suggestedAskingCents?: number; platform: string; status: ItemStatus; listedOn?: string; url?: string; image?: string; notes?: string; archived?: boolean }
-export interface SaleLine { itemId: string; quantity: number; allocatedCostCents: number; proceedsCents?: number; returnedQuantity?: number }
-export interface Sale { id: string; date: string; platform: string; grossCents: number; feeCents: number; shippingCents: number; otherExpenseCents: number; paymentStatus: PaymentStatus; receivedCents: number; refundCents: number; creditCents: number; itemIds: string[]; lines?: SaleLine[]; status: 'open' | 'completed' | 'returned' }
-export interface CashExpense { id: string; date: string; amountCents: number; description: string }
+export interface PurchaseGroup { id: string; name: string; source?: string; externalSource?: string; externalId?: string; fieldVerification?: FieldVerification }
+export interface InventoryUnit { id: string; itemId: string; copyNumber: number; status: ItemStatus; externalId?: string }
+export interface PurchaseLot { id: string; name: string; date: string; source: string; purchaseCents: number; expensesCents: number; notes?: string; externalSource?: string; externalId?: string; reportingGroupId?: string; fieldVerification?: FieldVerification }
+export interface InventoryItem { id: string; title: string; description?: string; category: string; quantity: number; originalQuantity?: number; lotId: string | null; costCents: number; askingCents: number; suggestedAskingCents?: number; platform: string; status: ItemStatus; listedOn?: string; url?: string; image?: string; notes?: string; archived?: boolean; externalSource?: string; externalId?: string; fieldVerification?: FieldVerification; userEditedFields?: string[] }
+export interface SaleLine { itemId: string; quantity: number; allocatedCostCents: number; proceedsCents?: number; returnedQuantity?: number; unitIds?: string[] }
+export interface Sale { id: string; date: string; platform: string; grossCents: number; feeCents: number; shippingCents: number; otherExpenseCents: number; paymentStatus: PaymentStatus; receivedCents: number; refundCents: number; creditCents: number; itemIds: string[]; lines?: SaleLine[]; status: 'open' | 'completed' | 'returned'; externalSource?: string; externalId?: string; fieldVerification?: FieldVerification }
+export interface LedgerTransaction { id: string; externalSource: string; externalId: string; type: LedgerTransactionType; date: string; platform?: string; grossCents: number; feesCents: number; expensesCents: number; receivedCents: number; creditCents: number; creditDirection?: 'issued' | 'redeemed'; expectedCents: number; paymentStatus: 'confirmed' | 'pending' | 'unpaid'; itemExternalIds?: string[]; notes?: string; fieldVerification: FieldVerification }
+export interface CashExpense { id: string; date: string; amountCents: number; description: string; externalSource?: string; externalId?: string; fieldVerification?: FieldVerification }
 export interface StoreCreditTransaction { id: string; date: string; kind: 'issued' | 'redeemed'; amountCents: number; description: string }
 export interface Platform { id: string; name: string; kind: PlatformKind }
-export interface TrackerData { lots: PurchaseLot[]; items: InventoryItem[]; sales: Sale[]; expenses: CashExpense[]; credit: StoreCreditTransaction[]; platforms: Platform[] }
+export interface TrackerData { lots: PurchaseLot[]; items: InventoryItem[]; sales: Sale[]; expenses: CashExpense[]; credit: StoreCreditTransaction[]; platforms: Platform[]; purchaseGroups?: PurchaseGroup[]; units?: InventoryUnit[]; ledgerTransactions?: LedgerTransaction[] }
 
 export const STATUS_LABELS: Record<ItemStatus, string> = {
   acquired: 'Acquired / Unlisted', draft: 'Draft Listing', active: 'Active Listing', reserved: 'Reserved',
@@ -34,6 +40,8 @@ export const formatMoney = (cents: number): string => new Intl.NumberFormat('en-
 export function lotTotalCents(lot: PurchaseLot): number { return lot.purchaseCents + lot.expensesCents }
 export function allocatedCostCents(data: TrackerData, lotId: string): number { return data.items.filter((item) => item.lotId === lotId).reduce((sum, item) => sum + item.costCents, 0) }
 export function lotUnallocatedCents(data: TrackerData, lot: PurchaseLot): number { return lotTotalCents(lot) - allocatedCostCents(data, lot.id) }
+export function purchaseGroupTotals(data: TrackerData) { return (data.purchaseGroups ?? []).map((group) => { const lots=data.lots.filter((lot)=>lot.reportingGroupId===group.id);return {group,lotCount:lots.length,purchaseCents:lots.reduce((sum,lot)=>sum+lot.purchaseCents,0),expenseCents:lots.reduce((sum,lot)=>sum+lot.expensesCents,0),lotIds:lots.map((lot)=>lot.id)} }) }
+export function isFieldConfirmed(record: { fieldVerification?: FieldVerification }, field: string) { const alias=field==='costCents'?'allocatedCostCents':field;return (record.fieldVerification?.[field] ?? record.fieldVerification?.[alias] ?? 'confirmed') === 'confirmed' }
 export function saleNetCents(sale: Sale): number { return sale.grossCents - sale.feeCents - sale.shippingCents - sale.otherExpenseCents - sale.refundCents }
 export function allocateCents(total: number, weights: number[]): number[] {
   if (!weights.length) return []
@@ -61,22 +69,35 @@ export function receivedCashCents(sale: Sale): number { return sale.paymentStatu
 export function storeCreditBalanceCents(data: TrackerData): number { return data.credit.reduce((sum, entry) => sum + (entry.kind === 'issued' ? entry.amountCents : -entry.amountCents), 0) }
 
 export function getMetrics(data: TrackerData) {
-  const purchaseInvestmentCents = data.lots.reduce((sum, lot) => sum + lotTotalCents(lot), 0) + data.items.filter((item) => !item.lotId).reduce((sum, item) => sum + item.costCents, 0)
-  const netCashProceedsCents = data.sales.reduce((sum, sale) => sum + receivedCashCents(sale), 0)
-  const otherCashExpensesCents = data.expenses.reduce((sum, expense) => sum + expense.amountCents, 0)
+  const confirmedAcquisition = (record: {fieldVerification?:FieldVerification},field:string,amount:number)=>isFieldConfirmed(record,field)?amount:0
+  const purchaseInvestmentCents = data.lots.reduce((sum, lot) => sum + confirmedAcquisition(lot,'purchaseCents',lot.purchaseCents)+confirmedAcquisition(lot,'expensesCents',lot.expensesCents), 0) + data.items.filter((item) => !item.lotId).reduce((sum, item) => sum + confirmedAcquisition(item,'costCents',item.costCents), 0)
+  const estimatedAcquisitionCostCents=data.lots.reduce((sum,lot)=>sum+lotTotalCents(lot)-confirmedAcquisition(lot,'purchaseCents',lot.purchaseCents)-confirmedAcquisition(lot,'expensesCents',lot.expensesCents),0)+data.items.filter((item)=>!item.lotId).reduce((sum,item)=>sum+item.costCents-confirmedAcquisition(item,'costCents',item.costCents),0)
+  const saleCash=data.sales.reduce((sum, sale) => sum + (isFieldConfirmed(sale,'receivedCents')?receivedCashCents(sale):0), 0)
+  const transactionCash=(data.ledgerTransactions??[]).filter((t)=>['cash_sale','buyback_payout'].includes(t.type)&&t.paymentStatus==='confirmed'&&isFieldConfirmed(t,'receivedCents')).reduce((sum,t)=>sum+t.receivedCents,0)
+  const netCashProceedsCents = saleCash+transactionCash
+  const expectedSales=data.sales.filter((sale)=>sale.paymentStatus==='unpaid').reduce((sum,sale)=>sum+(isFieldConfirmed(sale,'grossCents')?Math.max(0,sale.grossCents-sale.feeCents-sale.shippingCents-sale.otherExpenseCents-sale.refundCents):0),0)
+  const expectedAmount=(transaction:LedgerTransaction)=>transaction.expectedCents||Math.max(0,transaction.grossCents-transaction.feesCents-transaction.expensesCents)
+  const pendingOfferValueCents=(data.ledgerTransactions??[]).filter((t)=>t.type==='pending_offer'&&t.paymentStatus!=='confirmed').reduce((sum,t)=>sum+expectedAmount(t),0)
+  const expectedFutureProceedsCents=expectedSales+(data.ledgerTransactions??[]).filter((t)=>t.type!=='pending_offer'&&['cash_sale','buyback_payout'].includes(t.type)&&t.paymentStatus!=='confirmed').reduce((sum,t)=>sum+expectedAmount(t),0)+pendingOfferValueCents
+  const otherCashExpensesCents = data.expenses.reduce((sum, expense) => sum + (isFieldConfirmed(expense,'amountCents')?expense.amountCents:0), 0)+(data.ledgerTransactions??[]).filter((t)=>t.type==='other_expense'&&t.paymentStatus==='confirmed'&&isFieldConfirmed(t,'expensesCents')).reduce((sum,t)=>sum+t.expensesCents,0)
   const overallCashPositionCents = netCashProceedsCents - purchaseInvestmentCents - otherCashExpensesCents
-  const realizedItemProfitCents = data.sales.filter((sale) => sale.status === 'completed' && (sale.paymentStatus === 'paid' || sale.paymentStatus === 'refunded' || sale.paymentStatus === 'partial')).reduce((sum, sale) => {
+  const realizedItemProfitCents = data.sales.filter((sale) => sale.status === 'completed' && isFieldConfirmed(sale,'receivedCents') && (sale.paymentStatus === 'paid' || sale.paymentStatus === 'refunded' || sale.paymentStatus === 'partial') && (sale.lines??[]).every((line)=>isFieldConfirmed(data.items.find((item)=>item.id===line.itemId)??{},'costCents'))).reduce((sum, sale) => {
     if (sale.lines?.length) return sum + sale.lines.reduce((lineSum, line) => lineSum + lineNetProceedsCents(sale, line) - retainedCostCents(line), 0)
     const cost = sale.itemIds.reduce((itemsSum, itemId) => itemsSum + (data.items.find((item) => item.id === itemId)?.costCents ?? 0), 0)
     return sum + saleNetCents(sale) - cost
   }, 0)
   const available = data.items.filter((item) => ACTIVE_STATUSES.includes(item.status))
+  const remainingCost=(item:InventoryItem)=>Math.max(0,item.costCents-data.sales.flatMap((sale)=>sale.lines??[]).filter((line)=>line.itemId===item.id).reduce((cost,line)=>cost+retainedCostCents(line),0))
   return {
-    purchaseInvestmentCents, netCashProceedsCents, overallCashPositionCents, realizedItemProfitCents,
+    purchaseInvestmentCents, estimatedAcquisitionCostCents, netCashProceedsCents, expectedFutureProceedsCents, pendingOfferValueCents, overallCashPositionCents, realizedItemProfitCents,
     remainingQuantity: available.reduce((sum, item) => sum + item.quantity, 0),
-    remainingInventoryCostCents: available.reduce((sum, item) => sum + Math.max(0, item.costCents - data.sales.flatMap((sale) => sale.lines ?? []).filter((line) => line.itemId === item.id).reduce((cost, line) => cost + retainedCostCents(line), 0)), 0),
-    unsoldAskingCents: available.reduce((sum, item) => sum + item.askingCents * item.quantity, 0),
-    storeCreditBalanceCents: storeCreditBalanceCents(data),
+    remainingInventoryCostCents: available.reduce((sum, item) => sum + (isFieldConfirmed(item,'costCents')?remainingCost(item):0), 0),
+    unverifiedRemainingInventoryCostCents: available.reduce((sum,item)=>sum+(isFieldConfirmed(item,'costCents')?0:remainingCost(item)),0),
+    unsoldAskingCents: available.reduce((sum, item) => sum + (isFieldConfirmed(item,'askingCents')?item.askingCents:0) * item.quantity, 0),
+    unverifiedAskingValueCents: available.reduce((sum,item)=>sum+(isFieldConfirmed(item,'askingCents')?0:item.askingCents*item.quantity),0),
+    suggestedAskingValueCents: available.reduce((sum,item)=>sum+(item.suggestedAskingCents??0)*item.quantity,0),
+    storeCreditBalanceCents: storeCreditBalanceCents(data)+(data.ledgerTransactions??[]).filter((t)=>t.type==='store_credit'&&t.paymentStatus==='confirmed'&&isFieldConfirmed(t,'creditCents')).reduce((sum,t)=>sum+(t.creditDirection==='redeemed'?-t.creditCents:t.creditCents),0),
+    rewardsBalanceCents: (data.ledgerTransactions??[]).filter((t)=>t.type==='reward'&&t.paymentStatus==='confirmed'&&isFieldConfirmed(t,'creditCents')).reduce((sum,t)=>sum+(t.creditDirection==='redeemed'?-t.creditCents:t.creditCents),0),
   }
 }
 
