@@ -2,27 +2,382 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://mirpkered.github.io/resale-tracker/docs/resale-migration.schema.v1.json",
   "title": "Resale Tracker Migration",
-  "description": "Manually reviewed migration batch from verified resale records. Money is integer cents.",
+  "description": "Manual migration import, schema version 1.0. Integer cents only; examples are guidance and are never loaded automatically.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["format", "schemaVersion", "source", "purchaseGroups", "purchaseLots", "inventoryItems", "transactions"],
+  "required": [
+    "format",
+    "schemaVersion",
+    "source",
+    "purchaseGroups",
+    "purchaseLots",
+    "inventoryItems",
+    "transactions"
+  ],
   "properties": {
-    "format": { "const": "resale-tracker-migration" },
-    "schemaVersion": { "const": "1.0" },
-    "source": { "type": "object", "additionalProperties": false, "required": ["id", "name"], "properties": { "id": { "type": "string", "minLength": 1 }, "name": { "type": "string", "minLength": 1 } } },
-    "purchaseGroups": { "type": "array", "items": { "$ref": "#/$defs/purchaseGroup" } },
-    "purchaseLots": { "type": "array", "items": { "$ref": "#/$defs/purchaseLot" } },
-    "inventoryItems": { "type": "array", "items": { "$ref": "#/$defs/inventoryItem" } },
-    "transactions": { "type": "array", "items": { "$ref": "#/$defs/transaction" } }
+    "format": {
+      "const": "resale-tracker-migration"
+    },
+    "schemaVersion": {
+      "const": "1.0"
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "name"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "purchaseGroups": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/purchaseGroup"
+      }
+    },
+    "purchaseLots": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/purchaseLot"
+      }
+    },
+    "inventoryItems": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/inventoryItem"
+      }
+    },
+    "transactions": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/transaction"
+      }
+    }
   },
   "$defs": {
-    "cents": { "type": "integer", "minimum": 0 },
-    "verificationStatus": { "enum": ["confirmed", "estimated", "suggested", "pending", "unknown"] },
-    "verification": { "type": "object", "minProperties": 1, "additionalProperties": { "$ref": "#/$defs/verificationStatus" } },
-    "externalId": { "type": "string", "minLength": 1 },
-    "purchaseGroup": { "type": "object", "additionalProperties": false, "required": ["externalId", "name", "verification"], "properties": { "externalId": { "$ref": "#/$defs/externalId" }, "name": { "type": "string", "minLength": 1 }, "verification": { "$ref": "#/$defs/verification" } } },
-    "purchaseLot": { "type": "object", "additionalProperties": false, "required": ["externalId", "name", "date", "source", "purchaseCents", "verification"], "properties": { "externalId": { "$ref": "#/$defs/externalId" }, "name": { "type": "string", "minLength": 1 }, "date": { "type": "string", "format": "date" }, "source": { "type": "string" }, "purchaseCents": { "$ref": "#/$defs/cents" }, "expensesCents": { "$ref": "#/$defs/cents" }, "groupExternalId": { "$ref": "#/$defs/externalId" }, "notes": { "type": "string" }, "verification": { "$ref": "#/$defs/verification" } } },
-    "inventoryItem": { "type": "object", "additionalProperties": false, "required": ["externalId", "title", "quantity", "verification"], "properties": { "externalId": { "$ref": "#/$defs/externalId" }, "lotExternalId": { "$ref": "#/$defs/externalId" }, "title": { "type": "string", "minLength": 1 }, "description": { "type": "string" }, "category": { "type": "string" }, "quantity": { "type": "integer", "minimum": 1 }, "inventoryStatus": { "enum": ["acquired", "draft", "active", "reserved", "awaiting_payment", "awaiting_fulfillment", "completed", "returned", "traded", "donated", "disposed"] }, "allocatedCostCents": { "$ref": "#/$defs/cents" }, "askingCents": { "$ref": "#/$defs/cents" }, "suggestedAskingCents": { "$ref": "#/$defs/cents" }, "platform": { "type": "string" }, "listingState": { "enum": ["draft_suggestion", "confirmed_active"] }, "listingUrl": { "type": "string", "format": "uri" }, "imageUrl": { "type": "string", "format": "uri" }, "unitExternalIds": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "$ref": "#/$defs/externalId" } }, "notes": { "type": "string" }, "verification": { "$ref": "#/$defs/verification" } } },
-    "transaction": { "type": "object", "additionalProperties": false, "required": ["externalId", "type", "date", "paymentStatus", "verification"], "properties": { "externalId": { "$ref": "#/$defs/externalId" }, "type": { "enum": ["cash_sale", "buyback_payout", "store_credit", "reward", "pending_offer", "other_expense"] }, "date": { "type": "string", "format": "date" }, "platform": { "type": "string" }, "grossCents": { "$ref": "#/$defs/cents" }, "feesCents": { "$ref": "#/$defs/cents" }, "expensesCents": { "$ref": "#/$defs/cents" }, "receivedCents": { "$ref": "#/$defs/cents" }, "creditCents": { "$ref": "#/$defs/cents" }, "creditDirection": { "enum": ["issued", "redeemed"] }, "expectedCents": { "$ref": "#/$defs/cents" }, "paymentStatus": { "enum": ["confirmed", "pending", "unpaid"] }, "itemExternalIds": { "type": "array", "uniqueItems": true, "items": { "$ref": "#/$defs/externalId" } }, "notes": { "type": "string" }, "verification": { "$ref": "#/$defs/verification" } } }
+    "cents": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "verificationStatus": {
+      "enum": [
+        "confirmed",
+        "estimated",
+        "suggested",
+        "pending",
+        "unknown"
+      ]
+    },
+    "verification": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": {
+        "$ref": "#/$defs/verificationStatus"
+      }
+    },
+    "externalId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "purchaseGroup": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "externalId",
+        "name",
+        "verification"
+      ],
+      "properties": {
+        "externalId": {
+          "$ref": "#/$defs/externalId"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "verification": {
+          "$ref": "#/$defs/verification"
+        }
+      }
+    },
+    "purchaseLot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "externalId",
+        "name",
+        "date",
+        "source",
+        "purchaseCents",
+        "verification"
+      ],
+      "properties": {
+        "externalId": {
+          "$ref": "#/$defs/externalId"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "date": {
+          "type": "string",
+          "format": "date"
+        },
+        "source": {
+          "type": "string"
+        },
+        "purchaseCents": {
+          "$ref": "#/$defs/cents"
+        },
+        "expensesCents": {
+          "$ref": "#/$defs/cents"
+        },
+        "groupExternalId": {
+          "$ref": "#/$defs/externalId"
+        },
+        "notes": {
+          "type": "string"
+        },
+        "verification": {
+          "$ref": "#/$defs/verification"
+        }
+      }
+    },
+    "inventoryItem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "externalId",
+        "title",
+        "quantity",
+        "verification"
+      ],
+      "properties": {
+        "externalId": {
+          "$ref": "#/$defs/externalId"
+        },
+        "lotExternalId": {
+          "$ref": "#/$defs/externalId"
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1
+        },
+        "description": {
+          "type": "string"
+        },
+        "category": {
+          "type": "string"
+        },
+        "quantity": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "inventoryStatus": {
+          "enum": [
+            "acquired",
+            "draft",
+            "active",
+            "reserved",
+            "awaiting_payment",
+            "awaiting_fulfillment",
+            "completed",
+            "returned",
+            "traded",
+            "donated",
+            "disposed"
+          ]
+        },
+        "allocatedCostCents": {
+          "$ref": "#/$defs/cents"
+        },
+        "askingCents": {
+          "$ref": "#/$defs/cents"
+        },
+        "suggestedAskingCents": {
+          "$ref": "#/$defs/cents"
+        },
+        "platform": {
+          "type": "string"
+        },
+        "listingState": {
+          "enum": [
+            "draft_suggestion",
+            "confirmed_active"
+          ]
+        },
+        "listingUrl": {
+          "type": "string",
+          "format": "uri"
+        },
+        "imageUrl": {
+          "type": "string",
+          "format": "uri"
+        },
+        "unitExternalIds": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/externalId"
+          }
+        },
+        "notes": {
+          "type": "string"
+        },
+        "verification": {
+          "$ref": "#/$defs/verification"
+        }
+      }
+    },
+    "transaction": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "externalId",
+        "type",
+        "date",
+        "paymentStatus",
+        "verification"
+      ],
+      "properties": {
+        "externalId": {
+          "$ref": "#/$defs/externalId"
+        },
+        "type": {
+          "enum": [
+            "cash_sale",
+            "buyback_payout",
+            "store_credit",
+            "reward",
+            "pending_offer",
+            "other_expense"
+          ]
+        },
+        "date": {
+          "type": "string",
+          "format": "date"
+        },
+        "platform": {
+          "type": "string"
+        },
+        "grossCents": {
+          "$ref": "#/$defs/cents"
+        },
+        "feesCents": {
+          "$ref": "#/$defs/cents"
+        },
+        "expensesCents": {
+          "$ref": "#/$defs/cents"
+        },
+        "receivedCents": {
+          "$ref": "#/$defs/cents"
+        },
+        "creditCents": {
+          "$ref": "#/$defs/cents"
+        },
+        "creditDirection": {
+          "enum": [
+            "issued",
+            "redeemed"
+          ]
+        },
+        "expectedCents": {
+          "$ref": "#/$defs/cents"
+        },
+        "paymentStatus": {
+          "enum": [
+            "confirmed",
+            "pending",
+            "unpaid"
+          ]
+        },
+        "itemExternalIds": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/externalId"
+          }
+        },
+        "notes": {
+          "type": "string"
+        },
+        "verification": {
+          "$ref": "#/$defs/verification"
+        },
+        "itemQuantities": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "uniqueItems": false
+        },
+        "shippingCents": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "cash_sale"
+              },
+              "itemExternalIds": {
+                "type": "array",
+                "minItems": 1
+              }
+            },
+            "required": [
+              "type",
+              "itemExternalIds"
+            ]
+          },
+          "then": {
+            "required": [
+              "itemQuantities"
+            ],
+            "properties": {
+              "itemQuantities": {
+                "minItems": 1
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "cash_sale"
+              },
+              "paymentStatus": {
+                "const": "confirmed"
+              }
+            },
+            "required": [
+              "type",
+              "paymentStatus"
+            ]
+          },
+          "then": {
+            "required": [
+              "receivedCents"
+            ]
+          }
+        }
+      ]
+    }
   }
 }

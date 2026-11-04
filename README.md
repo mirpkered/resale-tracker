@@ -47,15 +47,19 @@ The Pages workflow in `.github/workflows/deploy.yml` installs dependencies, lint
 
 The former `supabase/` SQL migrations and RLS test are retained as historical v0.1 reference only. The v0.2 application does not connect to or require Supabase.
 
-## Import, accounting, and migration
+## Import, accounting, and migration (v0.4)
 
-Listing conversation imports remain manual and use the app's versioned JSON/CSV preview with stable source IDs and duplicate detection. There is no automatic access to ChatGPT Project conversations.
+The dedicated [ChatGPT import guide](public/docs/chatgpt-import-guide.md) documents the current `resale-tracker-migration` schema version `1.0`, stable ID rules, every supported field, verification statuses, and a full format example. The [formal JSON Schema](public/docs/resale-migration.schema.v1.json) is linked in the guide. The [downloadable template](public/examples/migration-template.v1.json) is empty and does not contain user records. ChatGPT Project access remains manual; the app does not read conversations automatically.
 
-For historical records, use **Reconciliation** and the empty `public/examples/migration-template.v1.json`. The documented ChatGPT-compatible format is in `public/docs/migration-schema-v1.md`, with a formal JSON Schema at `public/docs/resale-migration.schema.v1.json`. Each imported field carries a verification status; the preview identifies new/imported, existing, conflicting, ambiguous, and unverified values, and shows the before/after financial totals. User changes are preserved unless that record's conflict is explicitly approved. Create a personal workspace first; migration approval changes only local browser data. Then use the separate GitHub sync steps to save the approved records. Production data starts empty; no sample or migration-reference records were inserted. Preserve separate purchase lots (including the Halloween purchase and both Goodwill hauls); optional purchase groups only aggregate reports and never merge costs.
+Use **Reconciliation** to preview new and existing rows, possible duplicates, conflicts, missing/unverified fields, inventory quantity, purchase investment, confirmed asking value, confirmed cash, expected future proceeds, and realized profit. The preview does not write private GitHub storage. Stable IDs make repeated imports idempotent; changed values require per-record conflict approval and a separate import confirmation. User-edited fields remain until that conflict is explicitly approved.
 
-Duplicate inventory quantities retain individual copy IDs, and sale/return records reference those units. Import transaction types distinguish paid cash sales, buyback payouts, store credit, rewards, other expenses, and pending offers. Confirmed cash is reported separately from expected proceeds, and credit/rewards are not cash.
+Purchase groups are reporting labels. Goodwill Outlet/Bins purchases on November 1 ($54.78) and November 4 ($45.37) remain two purchase lots with a $100.15 combined reporting total. The October 31 Halloween DVD purchase ($23.00) remains separate, with only confirmed inventory imported. Joan of Arcadia Season 2 is unsold inventory; exclude the unverified Joan sale/pending transaction and $3.50 amount. The Japanese DS/3DS lot's approximately $25 cost is estimated until confirmed; represent its 67 DS and 3 3DS cartridges as separate copies. Keep generated listing text and Vinted prices as suggestions until a listing is confirmed active. These are migration reference notes only; nothing is preloaded.
 
-The app continues to use integer cents for money, separates gross sales from confirmed net cash, tracks store credit separately, distinguishes unsold asking value from realized revenue, and reports lot-level and consolidated metrics. Local persistence is not multi-device synchronization; use the manual repository procedure to back up and confirm changes.
+A `cash_sale` transaction may link item external IDs and their quantities. On first import, it reduces available stock, links individual unit IDs, allocates net proceeds and acquisition cost, and contributes realized profit only for confirmed payment and confirmed item cost. Stable transaction IDs prevent replay from reducing stock twice. Do not change the quantities on a previously imported sale in a later batch: record the return or inventory adjustment first. Asking prices and offers never count as sale revenue. Store credit and rewards stay separate from cash.
+
+Manual item editing covers descriptions, purchase lot, quantity, allocated cost, asking prices, platform, listing state, and notes. Sales and imported financial transactions can be edited in the app; changing gross, fees, shipping, expenses, or payment status recalculates confirmed cash and profit. Each local write adds a bounded audit entry that travels with the next GitHub snapshot. GitHub synchronization remains the existing manual workflow: prepare a batch, upload it to the private data repository, run the Actions workflow, and import the confirmed canonical snapshot.
+
+No sample inventory is seeded into the personal workspace or private data repository. The demo workspace remains separate.
 
 ## Validation
 
@@ -66,4 +70,4 @@ npm test
 npm run build
 ```
 
-Tests include cents and lot reconciliation, paid/unpaid proceeds, partial and bundled lines, refunds, status transitions, import duplicate previews, storage serialization, demo isolation, revision conflicts, retry idempotency, failed validation recovery, backup restoration, grouped-purchase totals, migration matching, estimated values, pending offers, copy units, and migration financial reconciliation.
+Tests include cents and lot reconciliation, paid/unpaid proceeds, partial and bundled lines, refunds, status transitions, import duplicate previews, storage serialization, demo isolation, revision conflicts, retry idempotency, failed validation recovery, backup restoration, grouped-purchase totals, migration matching, estimated values, pending offers, copy units, partial imported cash sales, repeat imports, and migration financial reconciliation.

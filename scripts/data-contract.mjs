@@ -39,8 +39,13 @@ export function validateData(data) {
       const key = `${transaction.externalSource}:${transaction.externalId}`
       assert(transaction.externalSource && transaction.externalId && !external.has(key), `Missing or duplicate ledger external ID: ${key}`); external.add(key)
       for (const field of ['grossCents', 'feesCents', 'expensesCents', 'receivedCents', 'creditCents', 'expectedCents']) cents(transaction[field], `Ledger ${field}`)
+      cents(transaction.shippingCents ?? 0, 'Ledger shipping')
+      if (transaction.itemQuantities !== undefined) { assert(Array.isArray(transaction.itemExternalIds) && transaction.itemQuantities.length === transaction.itemExternalIds.length && transaction.itemQuantities.every((quantity) => Number.isSafeInteger(quantity) && quantity > 0), `Ledger ${key} item quantities are invalid.`); assert(new Set(transaction.itemExternalIds).size === transaction.itemExternalIds.length, `Ledger ${key} contains duplicate item references.`) }
+      for (const field of ['saleAllocatedCostCents', 'saleAllocatedProceedsCents']) if (transaction[field] !== undefined) { assert(Array.isArray(transaction[field]) && transaction[field].length === (transaction.itemExternalIds ?? []).length, `Ledger ${key} ${field} does not match its item references.`); for (const amount of transaction[field]) cents(amount, `Ledger ${field}`) }
+      if (transaction.itemUnitIds !== undefined) { assert(Array.isArray(transaction.itemUnitIds) && transaction.itemUnitIds.length === (transaction.itemExternalIds ?? []).length, `Ledger ${key} unit IDs do not match its item references.`); for (const ids of transaction.itemUnitIds) assert(Array.isArray(ids) && ids.length > 0 && ids.every((id) => typeof id === 'string'), `Ledger ${key} contains an invalid sold-unit list.`) }
     }
   }
+  if (data.auditEvents !== undefined) { uniqueIds(data.auditEvents, 'local audit event'); for (const event of data.auditEvents) assert(typeof event.at === 'string' && typeof event.action === 'string' && typeof event.summary === 'string', `Local audit event ${event.id} is invalid.`) }
   const allocations = new Map()
   for (const lot of data.lots) { cents(lot.purchaseCents, 'Lot purchase cost'); cents(lot.expensesCents, 'Lot expenses') }
   for (const item of data.items) {
