@@ -1,0 +1,16 @@
+import { describe, expect, it } from 'vitest'
+import { applyBatch, emptyDocument, makeBatch, restoreBackup, sha256, validateData } from './data-contract.mjs'
+
+const uuid = (n) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`
+const sample = () => ({ lots: [{ id: uuid(1), name: 'Lot', date: '2026-11-01', source: 'Shop', purchaseCents: 1000, expensesCents: 100 }], items: [{ id: uuid(2), title: 'Item', category: 'Other', quantity: 1, originalQuantity: 1, lotId: uuid(1), costCents: 1100, askingCents: 1800, platform: 'eBay', status: 'active' }], sales: [], expenses: [], credit: [], platforms: [] })
+
+describe('GitHub JSON storage contract', () => {
+  it('serializes a schema-versioned integer-cent document', () => { const doc = emptyDocument('2026-11-04T00:00:00Z'); const batch = makeBatch(sample(), 0, uuid(4)); const result = applyBatch(doc, JSON.parse(JSON.stringify(batch)), { now: '2026-11-04T01:00:00Z' }); expect(result.document.schemaVersion).toBe('2.0'); expect(result.document.revision).toBe(1); expect(result.document.data.lots[0].purchaseCents).toBe(1000) })
+  it('detects stale base revisions without changing current records', () => { const first = applyBatch(emptyDocument(), makeBatch(sample(), 0, uuid(5))).document; expect(() => applyBatch(first, makeBatch(sample(), 0, uuid(6)))).toThrow(/Revision conflict/) })
+  it('makes same-batch retry idempotent and rejects changed reuse', () => { const batch = makeBatch(sample(), 0, uuid(7)); const first = applyBatch(emptyDocument(), batch); expect(applyBatch(first.document, batch).duplicate).toBe(true); expect(() => applyBatch(first.document, { ...batch, data: { ...batch.data, expenses: [{ id: uuid(8), amountCents: 1 }] } })).toThrow() })
+  it('keeps failed writes recoverable by leaving the current document intact', () => { const current = emptyDocument(); const invalid = { ...makeBatch(sample(), 0, uuid(9)), data: { ...sample(), items: [{ ...sample().items[0], costCents: 100000 }] } }; expect(() => applyBatch(current, invalid)).toThrow(/exceed/); expect(current.revision).toBe(0); expect(current.data.items).toHaveLength(0) })
+  it('does not migrate demo data into a new personal workspace by default', () => { const fresh = emptyDocument(); expect(fresh.data).toEqual({ lots: [], items: [], sales: [], expenses: [], credit: [], platforms: [] }); expect(fresh.data.items).toHaveLength(0) })
+  it('reconciles allocated cents to lot acquisition cost and rejects over-allocation', () => { const data = sample(); expect(validateData(data)).toBe(data); expect(() => validateData({ ...data, items: [{ ...data.items[0], costCents: 1101 }] })).toThrow(/exceed/) })
+  it('restores backup contents as a new revision and preserves audit trail', () => { const before = emptyDocument(); const applied = applyBatch(before, makeBatch(sample(), 0, uuid(10))).document; const changed = { ...applied, revision: 2, data: { ...applied.data, items: [] } }; const restored = restoreBackup(changed, applied, { expectedRevision: 2 }); expect(restored.revision).toBe(3); expect(restored.data.items).toHaveLength(1); expect(restored.audit.at(-1).action).toBe('backup_restore') })
+  it('hashes equivalent key order identically', () => { expect(sha256({ b: 2, a: 1 })).toBe(sha256({ a: 1, b: 2 })) })
+})

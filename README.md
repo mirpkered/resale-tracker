@@ -1,58 +1,59 @@
 # Resale Tracker
 
-Personal resale inventory and profit tracking. Version 0.1 is a React, TypeScript, and Vite single-page app, designed for GitHub Pages with optional private storage through Supabase.
+Personal resale inventory and profit tracking. Version 0.2 uses React, TypeScript, and Vite for GitHub Pages, with a private GitHub repository and an explicitly started GitHub Actions workflow for durable storage. This is not a Mirpworks application.
 
-**Demo mode:** With no Supabase settings, the app uses a labeled deterministic sample dataset and stores edits in this browser's local storage. These demo records are not persisted to an account, are not synchronized between devices, and are not production financial records.
+## Storage and security
 
-## Local development
+GitHub Pages serves static browser code. A browser app cannot safely write to a private repository without receiving a credential. This app does not use a PAT, OAuth client secret, GitHub App private key, Supabase, Render, or another backend. The app saves edits in browser local storage and exports a validated revision-based JSON batch. The user uploads that batch to the private data repository and manually starts its workflow. Only after importing the resulting canonical snapshot does the app report that revision as confirmed by GitHub.
 
-Requirements: Node.js 22 or newer and npm.
+The private store is [`mirpkered/resale-tracker-data`](https://github.com/mirpkered/resale-tracker-data). Keep it private and grant access only to the intended account. The repository-scoped Actions `GITHUB_TOKEN` writes data only inside that repository. No credentials or personal financial records are part of the public app repository. Demo/sample data remains in a separate browser workspace and is never included in sync batches; create an empty personal workspace before entering verified records.
+
+### Manual synchronization
+
+1. In the app, go to **Imports → GitHub data sync** and choose **Prepare batch**. The download is a validated `resale-tracker-sync-batch` schema `1.0` document with a stable batch ID, base revision, and integer-cent business records. This step is local only.
+2. In the private data repository, upload the file under `incoming/` and commit that upload.
+3. Open **Actions → Apply private data batch → Run workflow**; select `apply`, enter the exact `incoming/<filename>.json` path, and run it.
+4. After a successful workflow run, download `current/resale-data.v2.json` from the private repository and import it in the app. The app acknowledges a batch only when that remote snapshot's batch history contains its ID.
+
+The same batch is safe to retry. Duplicate IDs with changed content and stale base revisions are rejected. If a revision conflict occurs, import the newest snapshot, compare it with local records, and explicitly resolve the conflict. Before discarding local edits, export a local backup or reconcile them in a separate copy. Offline edits stay in the browser and are never described as committed.
+
+To restore a prior snapshot, run the private workflow with operation `restore`, a file under `backups/`, and the *current* revision. The workflow appends an audit event, preserves import history, backs up the current document, and records restoration as a new revision. `current/resale-data.v2.json` is canonical; `audit/events.ndjson` is an append-only workflow log; Git history also holds prior commits.
+
+The sync uses a JSON file committed to the private repository before the manual workflow dispatch. That permits batches larger than a `workflow_dispatch` text input; the workflow input itself is only the path. Keep each batch reasonably sized because GitHub repository file-size limits still apply.
+
+## Initial setup and local development
+
+Node.js 22 and npm are required.
 
 ```sh
+git clone https://github.com/mirpkered/resale-tracker.git
+cd resale-tracker
 npm ci
 npm run dev
 ```
 
-The GitHub Pages base path is `/resale-tracker/`. For local preview, Vite serves the app at `/resale-tracker/` as well.
+Vite uses `/resale-tracker/` as the production base path. `npm run preview` serves the built app locally. No frontend environment variables or GitHub secrets are required.
 
-## Supabase setup
+## GitHub repositories and deployment
 
-1. Create a Supabase project and keep its database password out of this repository.
-2. Apply `supabase/migrations/202611040001_initial_schema.sql` using the Supabase SQL Editor or the Supabase CLI (`supabase link`, then `supabase db push`). The schema includes owner-scoped tables, composite owner foreign keys, RLS policies, transaction-safe sale/refund RPCs, and an auth profile trigger.
-3. In Supabase Authentication, enable the desired sign-in method. Create/invite your first user from the Supabase dashboard; public self-registration is intentionally not enabled by this app.
-4. Set the Authentication Site URL and redirect URL to `https://mirpkered.github.io/resale-tracker/` after the GitHub repository exists. For local development, also allow `http://localhost:5173/`.
-5. Copy `.env.example` to `.env.local` and set `VITE_SUPABASE_URL` plus `VITE_SUPABASE_ANON_KEY` from the project's API settings.
+- Public app: [`mirpkered/resale-tracker`](https://github.com/mirpkered/resale-tracker), deployed to <https://mirpkered.github.io/resale-tracker/>.
+- Private data: [`mirpkered/resale-tracker-data`](https://github.com/mirpkered/resale-tracker-data), canonical empty document and sync workflow on `main`.
 
-Only the public anon/publishable key belongs in browser configuration. Never set a service-role key in a `VITE_` variable, commit a real `.env` file, or place credentials in source control. Supabase RLS is the boundary for user-owned records; do not disable it.
+The Pages workflow in `.github/workflows/deploy.yml` installs dependencies, lints, type-checks, tests, builds, and deploys on pushes to `main` (and validates pull requests). In the app repository, ensure **Settings → Pages → Build and deployment → Source** is set to **GitHub Actions**. Do not add private data repository credentials to app repository secrets or variables. There are no credentials to configure for the private workflow; it declares `contents: write` scoped to its own repository.
 
-The SQL isolation check is in `supabase/tests/rls.sql`; run it against a local Supabase database with `supabase test db` after installing/linking the Supabase CLI. The test uses two distinct authenticated identities and also checks an owner-mismatched foreign key.
+## Schema and historical migrations
 
-## GitHub Pages deployment
+`current/resale-data.v2.json` uses data schema `2.0` and stores lots, inventory, sales, expenses, store credit, platforms, batch hashes, revision numbers, and audit summaries. Monetary values are integer cents. `scripts/data-contract.mjs` validates ownership-internal references, lot allocation bounds, amounts, schema, retries, revision conflicts, and restore behavior. `scripts/sync-data.mjs` stages the canonical snapshot and audit log and commits the changed files together. A failed workflow does not create a Git commit.
 
-The public repository is [`mirpkered/resale-tracker`](https://github.com/mirpkered/resale-tracker), with GitHub Pages configured for Actions deployment at <https://mirpkered.github.io/resale-tracker/>. To publish later updates:
+The former `supabase/` SQL migrations and RLS test are retained as historical v0.1 reference only. The v0.2 application does not connect to or require Supabase.
 
-1. Push commits to the `main` branch.
-2. Add `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` as repository Actions **Variables** when Supabase is configured (these are public frontend values; do not use the service-role key). Leaving them unset deploys the clearly labeled demo experience.
-3. The workflow `.github/workflows/deploy.yml` runs lint, TypeScript validation, unit tests, and a production build on pushes and pull requests; a successful push to `main` deploys the artifact to GitHub Pages.
+## Import, accounting, and migration
 
-The expected URL is <https://mirpkered.github.io/resale-tracker/>. No deployment is claimed until the repository and Pages workflow are configured and a successful run completes.
+Listing conversation imports remain manual and use the app's versioned JSON/CSV preview with stable source IDs and duplicate detection. There is no automatic access to ChatGPT Project conversations. Existing verified resale records can be imported later; the data repository starts empty and no sample or migration-reference records were inserted. Preserve separate purchase lots (including the Halloween purchase and both Goodwill hauls) during any future migration.
 
-## Accounting and data behavior
+The app continues to use integer cents for money, separates gross sales from confirmed net cash, tracks store credit separately, distinguishes unsold asking value from realized revenue, and reports lot-level and consolidated metrics. Local persistence is not multi-device synchronization; use the manual repository procedure to back up and confirm changes.
 
-- Monetary values are integer cents; UI parsing rejects fractions beyond two decimal places.
-- Purchase lot costs and additional acquisition expenses are separate from item allocations. Unallocated lot value remains visible.
-- Cash proceeds appear only after a payment is confirmed. Profit reports include completed paid sales and reflect recorded refunds.
-- Unsold asking value is potential revenue and is never included as income.
-- Store credit has a separate ledger representation and is not counted as cash.
-- Sales can contain multiple inventory items and partial quantities. The database procedure locks item rows and reconciles the allocated cost to the current inventory balance.
-- Archive flags hide records from the active inventory view without deleting history.
-- ChatGPT Project conversations are not accessed automatically. JSON and CSV imports use schema `1.0`; each record has a stable `sourceId` and a preview before confirmation. Suggested prices remain separate from confirmed asking prices. Examples: `public/examples/listing-import.v1.json` and `.csv`.
-
-## Current v0.1 boundaries
-
-The working entry flows cover purchase lots, inventory and listing details, sales and bundle allocations, payment confirmation, cash expenses, returns/refunds, monthly cash summaries, reports, CSV export, and manual JSON/CSV imports. The UI edits one primary listing at a time while preserving other platform listings. Images are saved as references; binary photo storage is not included. Store-credit and trade-in ledgers, inventory adjustment history, and audit/import-history browsing have schema support but still need dedicated management screens. Demo mode persists only to the current browser.
-
-## Quality checks
+## Validation
 
 ```sh
 npm run lint
@@ -61,4 +62,4 @@ npm test
 npm run build
 ```
 
-Unit tests use deterministic data for cent math, lot allocation, partial/bundle sale allocation, confirmed versus unpaid sales, cash position, realized profit, store credit separation, refunds/returns, JSON/CSV duplicate import preview, and status transitions. Cross-user isolation is exercised separately by the Supabase pgTAP test and requires a local database.
+Tests include cents and lot reconciliation, paid/unpaid proceeds, partial and bundled lines, refunds, status transitions, import duplicate previews, storage serialization, demo isolation, revision conflicts, retry idempotency, failed validation recovery, and backup restoration.

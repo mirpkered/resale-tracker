@@ -8,5 +8,6 @@ export default tseslint.config(
   { ignores: ['dist', 'node_modules', 'public/sw.js'] },
   js.configs.recommended,
   ...tseslint.configs.recommended,
+  { files: ['scripts/**/*.mjs'], languageOptions: { globals: globals.node } },
   { files: ['**/*.{ts,tsx}'], languageOptions: { globals: globals.browser }, plugins: { 'react-hooks': reactHooks, 'react-refresh': reactRefresh }, rules: { ...reactHooks.configs.recommended.rules, 'react-refresh/only-export-components': ['warn', { allowConstantExport: true }] } },
 )
