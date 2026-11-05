@@ -71,6 +71,13 @@ describe('private GitHub Worker authentication boundary', () => {
     expect(result.headers.get('set-cookie')).toContain('HttpOnly; Secure; SameSite=Lax')
   })
 
+  it('accepts the documented login alias and redirects into the same protected OAuth flow', async () => {
+    const result = await worker.fetch(new Request('https://sync.example.workers.dev/api/auth/login'), env)
+    expect(result.status).toBe(302)
+    expect(new URL(result.headers.get('location')!).origin).toBe('https://github.com')
+    expect(result.headers.get('set-cookie')).toContain('rt_oauth_state=')
+  })
+
   it('rejects a callback with a mismatched OAuth state before exchanging its code', async () => {
     const started = await worker.fetch(new Request('https://sync.example.workers.dev/api/auth/start'), env)
     const stateCookie = currentCookie(started.headers.get('set-cookie')!)

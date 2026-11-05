@@ -40,7 +40,7 @@ export function useCloudSync(workspace: LocalWorkspace, setWorkspace: (workspace
     const loaded = await adapter.load()
     const current = workspaceRef.current
     setRevision(loaded.document.revision); setLastSavedAt(loaded.syncConfirmedAt)
-    if (current.mode !== 'personal') { setStatus('signed_out'); setError('Sign in is connected. Create or select a personal workspace to sync; demo data stays isolated.'); return }
+    if (current.mode !== 'personal') { setStatus('workspace_required'); setError('GitHub is connected. Create a personal workspace to load private inventory; demo data stays separate.'); return }
     const dirty = isWorkspaceDirty(current), remoteChanged = current.baseRevision !== loaded.document.revision || current.baseline !== serialize(loaded.document.data)
     const firstEmptyConnection = current.baseRevision === 0 && loaded.document.revision === 0
     if (requiresCloudMergeReview(current.data, loaded.document.data, remoteChanged, firstEmptyConnection)) {
