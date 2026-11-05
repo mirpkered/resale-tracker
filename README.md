@@ -1,6 +1,12 @@
 # Resale Tracker
 
-Personal resale inventory and profit tracking. Version 0.5 uses React, TypeScript, and Vite. The daily automatic-sync app is served by a same-origin Cloudflare Worker and reads/writes a narrowly scoped private GitHub data repository. GitHub Pages remains the public local/manual recovery frontend. This is not a Mirpworks application.
+Personal resale inventory and profit tracking. Version 0.6 uses React, TypeScript, and Vite. The daily automatic-sync app is served by a same-origin Cloudflare Worker and reads/writes a narrowly scoped private GitHub data repository. GitHub Pages remains the public local/manual recovery frontend. This is not a Mirpworks application.
+
+## Version 0.6 mobile and branding
+
+The approved green basket artwork is stored in `public/resale-tracker-icon.png`; generated 32, 180, 192, and 512 pixel icons live in `public/icons/`. The manifest uses paths relative to its own URL so both the GitHub Pages `/resale-tracker/` build and the Worker `/` build can install the app. On iPhone, open the deployed app and use the browser share menu's **Add to Home Screen** action. The app keeps local edits queued while offline and reports cloud persistence only after the Worker confirms a revision.
+
+Inventory search covers title, description, category, platform, lifecycle status, and purchase lot. Lot, platform, category, and status filters can be combined, and the results can be sorted by title, cost, asking price, or quantity.
 
 ## Storage and security
 
