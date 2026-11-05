@@ -50,7 +50,7 @@ function repositoryMock(options: { failPatch?: boolean } = {}) {
   return { repoFetch, fail: (value: boolean) => { failPatch = value }, paths: () => [...(trees.get(commits.get(head)!) ?? new Map()).keys()], revision: () => JSON.parse(blobs.get((trees.get(commits.get(head)!) ?? new Map()).get('current/resale-data.v2.json')!)!).revision }
 }
 
-afterEach(() => vi.unstubAllGlobals())
+afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks() })
 
 describe('private GitHub Worker authentication boundary', () => {
   it('rejects unauthenticated data reads and writes before contacting GitHub', async () => {
@@ -69,6 +69,15 @@ describe('private GitHub Worker authentication boundary', () => {
     expect(location.searchParams.get('code_challenge_method')).toBe('S256')
     expect(location.searchParams.get('code_challenge')).toMatch(/^[A-Za-z0-9_-]{43}$/)
     expect(result.headers.get('set-cookie')).toContain('HttpOnly; Secure; SameSite=Lax')
+  })
+
+  it('catches asynchronous OAuth start failures instead of leaking an uncaught Worker exception', async () => {
+    vi.spyOn(crypto.subtle, 'importKey').mockRejectedValueOnce(new Error('test key import failure'))
+    const errorLog = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    const result = await worker.fetch(new Request('https://sync.example.workers.dev/api/auth/start'), env)
+    expect(result.status).toBe(502)
+    expect(await result.json()).toMatchObject({ error: 'sync_failed', message: 'test key import failure' })
+    expect(errorLog).toHaveBeenCalledOnce()
   })
 
   it('accepts the documented login alias and redirects into the same protected OAuth flow', async () => {
@@ -103,6 +112,18 @@ describe('private GitHub Worker authentication boundary', () => {
     expect(sessionCookie).not.toContain('ghu-access-secret')
     expect(sessionCookie).not.toContain('ghr-refresh-secret')
     expect(sessionCookie).toContain('rt_github_session=')
+  })
+
+  it('catches asynchronous OAuth callback failures instead of leaking an uncaught Worker exception', async () => {
+    const started = await worker.fetch(new Request('https://sync.example.workers.dev/api/auth/start'), env)
+    const stateCookie = currentCookie(started.headers.get('set-cookie')!)
+    const oauth = new URL(started.headers.get('location')!).searchParams
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValueOnce(new Error('test token exchange failure')))
+    const errorLog = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    const callback = await worker.fetch(new Request(`https://sync.example.workers.dev/api/auth/callback?code=oauth-code&state=${oauth.get('state')}`, { headers: { Cookie: stateCookie } }), env)
+    expect(callback.status).toBe(502)
+    expect(await callback.json()).toMatchObject({ error: 'sync_failed', message: 'test token exchange failure' })
+    expect(errorLog).toHaveBeenCalledOnce()
   })
 
   it('rotates an expiring GitHub access token on the backend and returns a replacement cookie', async () => {

@@ -18,8 +18,8 @@ export default {
     try {
       if (url.pathname === '/api/health' && request.method === 'GET') return json({ ok: true, automaticSync: isConfigured(config), configured: isConfigured(config) })
       if (['/api/auth/start', '/api/auth/login', '/api/auth/callback', '/api/auth/sign-out', '/api/session', '/api/data'].includes(url.pathname) && !isConfigured(config)) return json({ error: 'sync_not_configured', message: 'Automatic GitHub sync requires GitHub App credentials and a session encryption key.' }, 503)
-      if (['/api/auth/start', '/api/auth/login'].includes(url.pathname) && request.method === 'GET') return startOAuth(request, config)
-      if (url.pathname === '/api/auth/callback' && request.method === 'GET') return finishOAuth(request, config)
+      if (['/api/auth/start', '/api/auth/login'].includes(url.pathname) && request.method === 'GET') return await startOAuth(request, config)
+      if (url.pathname === '/api/auth/callback' && request.method === 'GET') return await finishOAuth(request, config)
       if (url.pathname === '/api/auth/sign-out' && request.method === 'POST') { assertSameOrigin(request); return clearSession() }
       if (url.pathname === '/api/session' && request.method === 'GET') {
         const { session, cookie } = await getSession(request, config); rotatedCookie = cookie
