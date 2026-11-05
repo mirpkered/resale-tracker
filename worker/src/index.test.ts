@@ -60,35 +60,77 @@ describe('private GitHub Worker authentication boundary', () => {
     expect(read.status).toBe(401); expect(write.status).toBe(401); expect(fetchMock).not.toHaveBeenCalled()
   })
 
-  it('starts OAuth with random state, PKCE, offline refresh access, and HttpOnly state cookie', async () => {
+  it('serves a mobile-friendly device sign-in page without depending on a redirect cookie', async () => {
     const result = await worker.fetch(new Request('https://sync.example.workers.dev/api/auth/start'), env)
+    expect(result.status).toBe(200)
+    expect(result.headers.get('content-type')).toContain('text/html')
+    expect(result.headers.get('content-security-policy')).toContain("default-src 'none'")
+    expect(result.headers.get('set-cookie')).toBeNull()
+    expect(await result.text()).toContain('Create a GitHub sign-in code')
+  })
+
+  it('preserves the PKCE OAuth route for direct troubleshooting', async () => {
+    const result = await worker.fetch(new Request('https://sync.example.workers.dev/api/auth/oauth-start'), env)
     const location = new URL(result.headers.get('location')!)
     expect(result.status).toBe(302)
     expect(location.origin).toBe('https://github.com')
     expect(location.searchParams.get('scope')).toBe('offline_access')
     expect(location.searchParams.get('code_challenge_method')).toBe('S256')
     expect(location.searchParams.get('code_challenge')).toMatch(/^[A-Za-z0-9_-]{43}$/)
-    expect(result.headers.get('set-cookie')).toContain('Path=/; Max-Age=1800; HttpOnly; Secure; SameSite=None')
+    expect(result.headers.get('set-cookie')).toContain('SameSite=None')
   })
 
   it('catches asynchronous OAuth start failures instead of leaking an uncaught Worker exception', async () => {
     vi.spyOn(crypto.subtle, 'importKey').mockRejectedValueOnce(new Error('test key import failure'))
     const errorLog = vi.spyOn(console, 'error').mockImplementation(() => undefined)
-    const result = await worker.fetch(new Request('https://sync.example.workers.dev/api/auth/start'), env)
+    const result = await worker.fetch(new Request('https://sync.example.workers.dev/api/auth/oauth-start'), env)
     expect(result.status).toBe(502)
     expect(await result.json()).toMatchObject({ error: 'sync_failed', message: 'test key import failure' })
     expect(errorLog).toHaveBeenCalledOnce()
   })
 
-  it('accepts the documented login alias and redirects into the same protected OAuth flow', async () => {
+  it('serves the device sign-in page at the legacy login alias', async () => {
     const result = await worker.fetch(new Request('https://sync.example.workers.dev/api/auth/login'), env)
-    expect(result.status).toBe(302)
-    expect(new URL(result.headers.get('location')!).origin).toBe('https://github.com')
-    expect(result.headers.get('set-cookie')).toContain('rt_oauth_state=')
+    expect(result.status).toBe(200)
+    expect(await result.text()).toContain('Create a GitHub sign-in code')
+  })
+
+  it('starts GitHub device authorization with offline access and rejects cross-origin initiation', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(response({ device_code: 'device-secret', user_code: 'ABCD-EFGH', verification_uri: 'https://github.com/login/device', expires_in: 900, interval: 5 }))
+    vi.stubGlobal('fetch', fetchMock)
+    const request = new Request('https://sync.example.workers.dev/api/auth/device/start', { method: 'POST', headers: { Origin: 'https://sync.example.workers.dev', 'X-Resale-Request': '1' }, body: '{}' })
+    const result = await worker.fetch(request, env)
+    expect(result.status).toBe(200)
+    expect(await result.json()).toMatchObject({ deviceCode: 'device-secret', userCode: 'ABCD-EFGH', interval: 5 })
+    expect(String(fetchMock.mock.calls[0][0])).toBe('https://github.com/login/device/code')
+    expect(String(fetchMock.mock.calls[0][1]?.body)).toContain('scope=offline_access')
+    const rejected = await worker.fetch(new Request('https://sync.example.workers.dev/api/auth/device/start', { method: 'POST', headers: { Origin: 'https://attacker.example', 'X-Resale-Request': '1' }, body: '{}' }), env)
+    expect(rejected.status).toBe(401)
+    expect(fetchMock).toHaveBeenCalledOnce()
+  })
+
+  it('polls device authorization and sets the encrypted session cookie only after GitHub approval', async () => {
+    const deviceCode = 'A'.repeat(40)
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(response({ error: 'authorization_pending' }))
+      .mockResolvedValueOnce(response({ access_token: 'ghu-device-token', refresh_token: 'ghr-device-token', expires_in: 28800, refresh_token_expires_in: 15897600 }))
+      .mockResolvedValueOnce(response({ login: 'mirpkered' }))
+      .mockResolvedValueOnce(response({ full_name: 'mirpkered/resale-tracker-data', permissions: { push: true } }))
+    vi.stubGlobal('fetch', fetchMock)
+    const poll = () => worker.fetch(new Request('https://sync.example.workers.dev/api/auth/device/poll', { method: 'POST', headers: { Origin: 'https://sync.example.workers.dev', 'X-Resale-Request': '1', 'Content-Type': 'application/json' }, body: JSON.stringify({ deviceCode }) }), env)
+    const pending = await poll()
+    expect(pending.status).toBe(202)
+    expect(await pending.json()).toMatchObject({ status: 'pending' })
+    const approved = await poll()
+    expect(approved.status).toBe(200)
+    expect(await approved.json()).toMatchObject({ authenticated: true, login: 'mirpkered' })
+    expect(approved.headers.get('set-cookie')).toContain('rt_github_session=')
+    expect(approved.headers.get('set-cookie')).toContain('HttpOnly; Secure; SameSite=Lax')
+    expect(approved.headers.get('set-cookie')).not.toContain('ghu-device-token')
   })
 
   it('rejects a callback with a mismatched OAuth state before exchanging its code', async () => {
-    const started = await worker.fetch(new Request('https://sync.example.workers.dev/api/auth/start'), env)
+    const started = await worker.fetch(new Request('https://sync.example.workers.dev/api/auth/oauth-start'), env)
     const stateCookie = currentCookie(started.headers.get('set-cookie')!)
     const fetchMock = vi.fn(); vi.stubGlobal('fetch', fetchMock)
     const result = await worker.fetch(new Request('https://sync.example.workers.dev/api/auth/callback?code=not-real&state=attacker', { headers: { Cookie: stateCookie } }), env)
@@ -113,7 +155,7 @@ describe('private GitHub Worker authentication boundary', () => {
   })
 
   it('exchanges a valid OAuth callback and keeps GitHub tokens encrypted in HttpOnly cookies', async () => {
-    const started = await worker.fetch(new Request('https://sync.example.workers.dev/api/auth/start'), env)
+    const started = await worker.fetch(new Request('https://sync.example.workers.dev/api/auth/oauth-start'), env)
     const stateCookie = currentCookie(started.headers.get('set-cookie')!)
     const oauth = new URL(started.headers.get('location')!).searchParams
     const fetchMock = vi.fn()
@@ -132,7 +174,7 @@ describe('private GitHub Worker authentication boundary', () => {
   })
 
   it('catches asynchronous OAuth callback failures instead of leaking an uncaught Worker exception', async () => {
-    const started = await worker.fetch(new Request('https://sync.example.workers.dev/api/auth/start'), env)
+    const started = await worker.fetch(new Request('https://sync.example.workers.dev/api/auth/oauth-start'), env)
     const stateCookie = currentCookie(started.headers.get('set-cookie')!)
     const oauth = new URL(started.headers.get('location')!).searchParams
     vi.stubGlobal('fetch', vi.fn().mockRejectedValueOnce(new Error('test token exchange failure')))
@@ -144,7 +186,7 @@ describe('private GitHub Worker authentication boundary', () => {
   })
 
   it('reports a safe GitHub OAuth rejection code without exposing the provider description', async () => {
-    const started = await worker.fetch(new Request('https://sync.example.workers.dev/api/auth/start'), env)
+    const started = await worker.fetch(new Request('https://sync.example.workers.dev/api/auth/oauth-start'), env)
     const stateCookie = currentCookie(started.headers.get('set-cookie')!)
     const oauth = new URL(started.headers.get('location')!).searchParams
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(response({ error: 'incorrect_client_credentials', error_description: 'never echo provider details' }, 401)))
@@ -156,7 +198,7 @@ describe('private GitHub Worker authentication boundary', () => {
   })
 
   it('identifies a missing refresh token without returning credential values', async () => {
-    const started = await worker.fetch(new Request('https://sync.example.workers.dev/api/auth/start'), env)
+    const started = await worker.fetch(new Request('https://sync.example.workers.dev/api/auth/oauth-start'), env)
     const stateCookie = currentCookie(started.headers.get('set-cookie')!)
     const oauth = new URL(started.headers.get('location')!).searchParams
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(response({ access_token: 'ghu-test-token', expires_in: 28800 }, 200)))
@@ -168,7 +210,7 @@ describe('private GitHub Worker authentication boundary', () => {
   })
 
   it('returns GitHub’s sanitized reason and API route for a repository permission denial', async () => {
-    const started = await worker.fetch(new Request('https://sync.example.workers.dev/api/auth/start'), env)
+    const started = await worker.fetch(new Request('https://sync.example.workers.dev/api/auth/oauth-start'), env)
     const stateCookie = currentCookie(started.headers.get('set-cookie')!)
     const oauth = new URL(started.headers.get('location')!).searchParams
     const fetchMock = vi.fn()

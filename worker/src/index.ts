@@ -17,8 +17,11 @@ export default {
     let rotatedCookie: string | undefined
     try {
       if (url.pathname === '/api/health' && request.method === 'GET') return json({ ok: true, automaticSync: isConfigured(config), configured: isConfigured(config) })
-      if (['/api/auth/start', '/api/auth/login', '/api/auth/callback', '/api/auth/sign-out', '/api/session', '/api/data'].includes(url.pathname) && !isConfigured(config)) return json({ error: 'sync_not_configured', message: 'Automatic GitHub sync requires GitHub App credentials and a session encryption key.' }, 503)
-      if (['/api/auth/start', '/api/auth/login'].includes(url.pathname) && request.method === 'GET') return await startOAuth(request, config)
+      if (['/api/auth/start', '/api/auth/login', '/api/auth/oauth-start', '/api/auth/callback', '/api/auth/device/start', '/api/auth/device/poll', '/api/auth/sign-out', '/api/session', '/api/data'].includes(url.pathname) && !isConfigured(config)) return json({ error: 'sync_not_configured', message: 'Automatic GitHub sync requires GitHub App credentials and a session encryption key.' }, 503)
+      if (['/api/auth/start', '/api/auth/login'].includes(url.pathname) && request.method === 'GET') return deviceSignInPage()
+      if (url.pathname === '/api/auth/device/start' && request.method === 'POST') return await startDeviceFlow(request, config)
+      if (url.pathname === '/api/auth/device/poll' && request.method === 'POST') return await pollDeviceFlow(request, config)
+      if (url.pathname === '/api/auth/oauth-start' && request.method === 'GET') return await startOAuth(request, config)
       if (url.pathname === '/api/auth/callback' && request.method === 'GET') return await finishOAuth(request, config)
       if (url.pathname === '/api/auth/sign-out' && request.method === 'POST') { assertSameOrigin(request); return clearSession() }
       if (url.pathname === '/api/session' && request.method === 'GET') {
@@ -41,7 +44,7 @@ export default {
       return json({ error: 'not_found' }, 404)
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unknown error'
-      const status = message.startsWith('Unauthorized') ? 401 : message.startsWith('Revision conflict') ? 409 : message.startsWith('Invalid') ? 400 : 502
+      const status = message.startsWith('Unauthorized') ? 401 : message.startsWith('Forbidden') ? 403 : message.startsWith('Revision conflict') ? 409 : message.startsWith('Invalid') ? 400 : 502
       console.error(JSON.stringify({ event: 'sync_request_failed', route: url.pathname, status, reason: message.slice(0, 160) }))
       return json({ error: status === 409 ? 'revision_conflict' : status === 401 ? 'reauthorization_required' : 'sync_failed', message }, status, rotatedCookie)
     }
@@ -66,6 +69,46 @@ async function startOAuth(request: Request, env: RuntimeEnv): Promise<Response> 
   return new Response(null, { status: 302, headers })
 }
 
+function deviceSignInPage(): Response {
+  const nonce = randomToken(18)
+  const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light dark"><title>Connect Resale Tracker</title><style nonce="${nonce}">:root{font:16px system-ui,sans-serif;color-scheme:light dark}body{margin:0;background:#111827;color:#f8fafc;min-height:100vh;display:grid;place-items:center;padding:20px;box-sizing:border-box}.card{width:min(100%,440px);background:#1f2937;border:1px solid #374151;border-radius:20px;padding:24px;box-sizing:border-box}h1{font-size:1.5rem;margin:0 0 10px}p{color:#d1d5db;line-height:1.5}.button,a.button{display:flex;justify-content:center;align-items:center;min-height:50px;padding:0 16px;border:0;border-radius:12px;background:#2563eb;color:white;font:inherit;font-weight:700;text-decoration:none;box-sizing:border-box;width:100%;margin:12px 0}button:disabled{opacity:.5}.code{font-size:2rem;letter-spacing:.14em;font-weight:800;text-align:center;padding:14px;border:1px dashed #9ca3af;border-radius:12px}.hint{font-size:.9rem}.error{color:#fca5a5;min-height:1.5em}#steps[hidden],#codebox[hidden]{display:none}</style></head><body><main class="card"><h1>Connect Resale Tracker to GitHub</h1><p>This code-based sign-in avoids the browser redirect cookie issue. Your GitHub access token stays on the secure Worker.</p><button id="begin" class="button">Create a GitHub sign-in code</button><section id="steps" hidden><p>1. Open GitHub and enter this one-time code:</p><div id="usercode" class="code"></div><a class="button" href="https://github.com/login/device" target="_blank" rel="noopener noreferrer">Open GitHub device authorization</a><p class="hint">2. Approve Resale Tracker, then return here. This code expires in 15 minutes.</p><button id="check" class="button">Check authorization</button></section><p id="message" role="status" aria-live="polite"></p><p id="error" class="error" role="alert"></p></main><script nonce="${nonce}">(function(){const begin=document.getElementById('begin'),steps=document.getElementById('steps'),usercode=document.getElementById('usercode'),check=document.getElementById('check'),message=document.getElementById('message'),error=document.getElementById('error');let deviceCode='',interval=5,lastPoll=0;function post(path,body){return fetch(path,{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json','X-Resale-Request':'1'},body:JSON.stringify(body||{})})}begin.addEventListener('click',async()=>{begin.disabled=true;error.textContent='';message.textContent='Requesting a one-time code…';try{const r=await post('/api/auth/device/start');const d=await r.json();if(!r.ok)throw new Error(d.message||'Could not start GitHub authorization.');deviceCode=d.deviceCode;interval=Math.max(5,Number(d.interval)||5);usercode.textContent=d.userCode;steps.hidden=false;begin.hidden=true;message.textContent='Waiting for approval in GitHub.';lastPoll=0}catch(e){error.textContent=e instanceof Error?e.message:'Could not start sign-in.';begin.disabled=false;message.textContent=''}});check.addEventListener('click',async()=>{if(!deviceCode)return;const wait=interval*1000-(Date.now()-lastPoll);if(wait>0){message.textContent='Please wait '+Math.ceil(wait/1000)+' seconds before checking again.';return}check.disabled=true;error.textContent='';message.textContent='Checking GitHub authorization…';lastPoll=Date.now();try{const r=await post('/api/auth/device/poll',{deviceCode});const d=await r.json();if(r.status===202){if(d.interval)interval=Math.max(interval,Number(d.interval));message.textContent='Not approved yet. Approve in GitHub, then check again.';return}if(!r.ok)throw new Error(d.message||'GitHub authorization failed.');message.textContent='Connected. Loading your private inventory…';window.location.replace('/')}catch(e){error.textContent=e instanceof Error?e.message:'Could not check authorization.';message.textContent=''}finally{check.disabled=false}})})();</script></body></html>`
+  return new Response(html, { status: 200, headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer', 'X-Content-Type-Options': 'nosniff', 'Content-Security-Policy': `default-src 'none'; style-src 'nonce-${nonce}'; script-src 'nonce-${nonce}'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'` } })
+}
+
+async function startDeviceFlow(request: Request, env: RuntimeEnv): Promise<Response> {
+  assertSameOrigin(request)
+  const form = new URLSearchParams({ client_id: env.GITHUB_APP_CLIENT_ID, scope: 'offline_access' })
+  const response = await fetch('https://github.com/login/device/code', { method: 'POST', headers: { Accept: 'application/json', 'Content-Type': 'application/x-www-form-urlencoded' }, body: form.toString() })
+  const result = await response.json().catch(() => null) as Record<string, unknown> | null
+  if (!response.ok || typeof result?.device_code !== 'string' || typeof result.user_code !== 'string') {
+    const code = typeof result?.error === 'string' && /^[a-z0-9_]+$/i.test(result.error) ? result.error : `http_${response.status}`
+    throw new Error(`GitHub device authorization could not start (${code}). Enable Device Flow in the GitHub App settings, then retry.`)
+  }
+  return json({ deviceCode: result.device_code, userCode: result.user_code, verificationUri: 'https://github.com/login/device', expiresIn: result.expires_in, interval: result.interval })
+}
+
+async function pollDeviceFlow(request: Request, env: RuntimeEnv): Promise<Response> {
+  assertSameOrigin(request)
+  const input = await readJsonLimited<{ deviceCode?: unknown }>(request, 4096)
+  if (typeof input.deviceCode !== 'string' || !/^[A-Za-z0-9._-]{30,200}$/.test(input.deviceCode)) return json({ error: 'invalid_device_code', message: 'The GitHub sign-in code is invalid. Start again.' }, 400)
+  const form = new URLSearchParams({ client_id: env.GITHUB_APP_CLIENT_ID, device_code: input.deviceCode, grant_type: 'urn:ietf:params:oauth:grant-type:device_code' })
+  const response = await fetch('https://github.com/login/oauth/access_token', { method: 'POST', headers: { Accept: 'application/json', 'Content-Type': 'application/x-www-form-urlencoded' }, body: form.toString() })
+  const token = await response.json().catch(() => null) as Record<string, unknown> | null
+  if (token?.error === 'authorization_pending') return json({ status: 'pending' }, 202)
+  if (token?.error === 'slow_down') return json({ status: 'pending', interval: 10 }, 202)
+  if (token?.error) {
+    const code = typeof token.error === 'string' && /^[a-z0-9_]+$/i.test(token.error) ? token.error : 'authorization_failed'
+    const status = code === 'access_denied' ? 403 : code === 'expired_token' ? 410 : 400
+    return json({ error: code, message: code === 'expired_token' ? 'The GitHub sign-in code expired. Start again.' : code === 'access_denied' ? 'GitHub authorization was denied. Start again when ready.' : `GitHub authorization could not be completed (${code}).` }, status)
+  }
+  if (!response.ok || typeof token?.access_token !== 'string' || typeof token.refresh_token !== 'string') {
+    const code = typeof token?.error === 'string' && /^[a-z0-9_]+$/i.test(token.error) ? token.error : `http_${response.status}`
+    return json({ error: 'token_exchange_failed', message: `GitHub token exchange failed (${code}).` }, 502)
+  }
+  const authorized = await establishSession(token as { access_token: string; refresh_token: string; expires_in?: number; refresh_token_expires_in?: number }, env)
+  return json({ authenticated: true, login: authorized.login, expiresAt: authorized.expiresAt }, 200, authorized.cookie)
+}
+
 async function finishOAuth(request: Request, env: RuntimeEnv): Promise<Response> {
   const url = new URL(request.url), code = url.searchParams.get('code'), state = url.searchParams.get('state')
   const stateCookie = readCookie(request, STATE_COOKIE)
@@ -76,18 +119,23 @@ async function finishOAuth(request: Request, env: RuntimeEnv): Promise<Response>
   try { expected = await unseal<{ state: string; verifier: string }>(stateCookie, env.SESSION_ENCRYPTION_KEY) } catch { return new Response('GitHub sign-in could not be verified. Restart sign-in.', { status: 400 }) }
   if (!constantTimeEqual(state, expected.state)) return new Response('GitHub sign-in could not be verified. Restart sign-in.', { status: 400 })
   const token = await tokenRequest(new URLSearchParams({ client_id: env.GITHUB_APP_CLIENT_ID, client_secret: env.GITHUB_APP_CLIENT_SECRET, code, redirect_uri: `${url.origin}/api/auth/callback`, code_verifier: expected.verifier }), 'authorization_code')
+  const authorized = await establishSession(token, env)
+  const headers = new Headers({ Location: `${url.origin}/`, 'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer' })
+  headers.append('Set-Cookie', authorized.cookie)
+  headers.append('Set-Cookie', `${STATE_COOKIE}=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=None`)
+  return new Response(null, { status: 302, headers })
+}
+
+async function establishSession(token: { access_token: string; refresh_token: string; expires_in?: number; refresh_token_expires_in?: number }, env: RuntimeEnv) {
   const user = await githubApi<{ login: string }>('/user', token.access_token)
-  if (user.login !== env.GITHUB_ALLOWED_LOGIN) return new Response('This GitHub account is not authorized for this personal tracker.', { status: 403 })
+  if (user.login !== env.GITHUB_ALLOWED_LOGIN) throw new Error('Forbidden: this GitHub account is not authorized for this personal tracker.')
   const repository = await githubApi<{ full_name?: string; permissions?: { push?: boolean } }>(`/repos/${env.GITHUB_REPO_OWNER}/${env.GITHUB_REPO_NAME}`, token.access_token)
-  if (repository.full_name?.toLowerCase() !== `${env.GITHUB_REPO_OWNER}/${env.GITHUB_REPO_NAME}`.toLowerCase() || repository.permissions?.push !== true) return new Response('The GitHub App must be installed for this account with read/write access to the private data repository.', { status: 403 })
+  if (repository.full_name?.toLowerCase() !== `${env.GITHUB_REPO_OWNER}/${env.GITHUB_REPO_NAME}`.toLowerCase() || repository.permissions?.push !== true) throw new Error('Forbidden: the GitHub App must have read/write access to the private data repository for this account.')
   const expiresAt = Date.now() + Number(token.expires_in ?? 28_800) * 1000
   const refreshExpiresAt = Date.now() + Number(token.refresh_token_expires_in ?? 15_897_600) * 1000
   const session: AuthSession = { login: user.login, accessToken: token.access_token, refreshToken: token.refresh_token, accessExpiresAt: expiresAt, refreshExpiresAt }
   const sealed = await seal(session, env.SESSION_ENCRYPTION_KEY)
-  const headers = new Headers({ Location: `${url.origin}/`, 'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer' })
-  headers.append('Set-Cookie', `${COOKIE}=${sealed}; Path=/; Max-Age=${Math.floor((refreshExpiresAt - Date.now()) / 1000)}; HttpOnly; Secure; SameSite=Lax`)
-  headers.append('Set-Cookie', `${STATE_COOKIE}=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=None`)
-  return new Response(null, { status: 302, headers })
+  return { login: user.login, expiresAt, cookie: `${COOKIE}=${sealed}; Path=/; Max-Age=${Math.floor((refreshExpiresAt - Date.now()) / 1000)}; HttpOnly; Secure; SameSite=Lax` }
 }
 
 async function getSession(request: Request, env: RuntimeEnv): Promise<{ session: AuthSession; cookie?: string }> {
