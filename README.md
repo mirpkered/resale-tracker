@@ -1,8 +1,8 @@
 # Resale Tracker
 
-Personal resale inventory and profit tracking. Version 0.6 uses React, TypeScript, and Vite. The daily automatic-sync app is served by a same-origin Cloudflare Worker and reads/writes a narrowly scoped private GitHub data repository. GitHub Pages remains the public local/manual recovery frontend. This is not a Mirpworks application.
+Personal resale inventory and profit tracking. Version 0.6.1 uses React, TypeScript, and Vite. The daily automatic-sync app is served by a same-origin Cloudflare Worker and reads/writes a narrowly scoped private GitHub data repository. GitHub Pages remains the public local/manual recovery frontend. This is not a Mirpworks application.
 
-## Version 0.6 mobile and branding
+## Version 0.6.1 mobile startup and branding
 
 The approved green basket artwork is stored in `public/resale-tracker-icon.png`; generated 32, 180, 192, and 512 pixel icons live in `public/icons/`. The manifest uses paths relative to its own URL so both the GitHub Pages `/resale-tracker/` build and the Worker `/` build can install the app. On iPhone, open the deployed app and use the browser share menu's **Add to Home Screen** action. The app keeps local edits queued while offline and reports cloud persistence only after the Worker confirms a revision.
 
@@ -12,11 +12,11 @@ Inventory can also be marked `retained` for personal use. Retained copies are ex
 
 ## Storage and security
 
-The secure app uses a Cloudflare Worker to serve both static assets and `/api/*` from one origin. GitHub OAuth callback, PKCE/state verification, private snapshot reads/writes, and encrypted HttpOnly session cookies stay on the Worker. GitHub App user tokens are never sent to browser JavaScript or saved in localStorage. The App is configured for only the private `mirpkered/resale-tracker-data` repository with Contents read/write and Metadata read access; the backend pins the owner, repository, branch, and allowed GitHub login.
+The secure app uses a Cloudflare Worker to serve both static assets and `/api/*` from one origin. GitHub Device Flow, private snapshot reads/writes, and encrypted HttpOnly session cookies stay on the Worker. GitHub App user tokens are never sent to browser JavaScript or saved in localStorage. The App is configured for only the private `mirpkered/resale-tracker-data` repository with Contents read/write and Metadata read access; the backend pins the owner, repository, branch, and allowed GitHub login.
 
-The Worker validates each revision-based batch, creates the new canonical snapshot and prior-revision backup in one Git commit, fast-forward updates the private `main` ref, and reads the snapshot back before reporting a save. Offline edits remain queued in browser local storage. Revision conflicts preserve local work for explicit reconciliation. The private repo remains canonical; demo data remains separate.
+The Worker validates each revision-based batch, creates the new canonical snapshot and prior-revision backup in one Git commit, fast-forward updates the private `main` ref, and reads the snapshot back before reporting a save. Offline edits remain queued in browser local storage. Revision conflicts preserve local work for explicit reconciliation. The private repo remains canonical. Fresh browser contexts start empty and load private data only after an authenticated cloud read.
 
-**Setup status:** the Worker code and UI are implemented and locally tested. Automatic sync is not operational until the GitHub App and Worker secrets are configured and an authenticated read/write/reload cycle succeeds. See [Automatic Sync Setup](public/docs/automatic-sync-setup.md) for the architecture, security model, iPhone first-connection steps, and setup guide. The GitHub Pages URL is a local/manual fallback because Safari blocks cross-site cookies; use the Worker URL for authenticated daily use.
+**Production status:** the GitHub App and Worker are configured. Use the secure Worker URL for authenticated cloud inventory. The app checks the session and loads the canonical cloud document before displaying records. GitHub Pages remains a recovery frontend and directs users to the Worker for private inventory.
 
 ### Advanced manual recovery
 
@@ -60,7 +60,7 @@ A `cash_sale` transaction may link item external IDs and their quantities. On fi
 
 Manual item editing covers descriptions, purchase lot, quantity, allocated cost, asking prices, platform, listing state, and notes. Sales and imported financial transactions can be edited in the app; changing gross, fees, shipping, expenses, or payment status recalculates confirmed cash and profit. Each local write adds a bounded audit entry. When authenticated in the Worker-hosted app, every approved edit automatically enters the revision-checked save queue; the Pages copy remains local until connected through a same-origin secure backend.
 
-No sample inventory is seeded into the personal workspace or private data repository. The demo workspace remains separate.
+Production starts with an empty local workspace when no private snapshot has been confirmed on this browser. Test fixtures are imported only by automated tests and are not included in the production application bundle.
 
 ## Validation
 
@@ -71,4 +71,4 @@ npm test
 npm run build
 ```
 
-Tests include cents and lot reconciliation, paid/unpaid proceeds, partial and bundled lines, refunds, status transitions, import duplicate previews, storage serialization, demo isolation, revision conflicts, retry idempotency, failed validation recovery, backup restoration, grouped-purchase totals, migration matching, estimated values, pending offers, copy units, partial imported cash sales, repeat imports, migration financial reconciliation, legacy device backup reconciliation, OAuth state/PKCE, unauthorized access, refresh-token expiry, same-origin CSRF rejection, atomic GitHub revisions, backup commits, safe retries, and offline/local backup validation.
+Tests include cents and lot reconciliation, paid/unpaid proceeds, partial and bundled lines, refunds, status transitions, import duplicate previews, empty production startup, storage serialization, fixture isolation, revision conflicts, retry idempotency, failed validation recovery, backup restoration, grouped-purchase totals, migration matching, estimated values, pending offers, copy units, partial imported cash sales, repeat imports, migration financial reconciliation, legacy device backup reconciliation, OAuth state/PKCE, unauthorized access, refresh-token expiry, same-origin CSRF rejection, atomic GitHub revisions, backup commits, safe retries, and offline/local backup validation.

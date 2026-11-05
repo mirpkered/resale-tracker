@@ -123,11 +123,11 @@ The following is a clearly fictional format example for schema testing. It is no
 
 ## Approval and GitHub sync steps
 
-1. Start an empty **Personal workspace**; demo records are isolated.
+1. Use the authenticated Worker app. It loads the current private inventory before imports are reviewed; a new empty cloud repository appears as an empty inventory.
 2. Have ChatGPT produce JSON using this guide and the schema. Verify IDs, dates, quantities, costs, listing confirmation, and transaction evidence.
 3. In **Reconciliation**, select the JSON and run **Validate & preview**. Review existing records, potential duplicates, unverified/missing information, inventory quantity, purchase investment, asking value, confirmed cash, and realized profit.
-4. Approve only reviewed conflicts, then confirm the import. The result is local to this browser at this point.
-5. Open **Imports → GitHub data sync**, prepare the batch, upload it under `incoming/` in the private `mirpkered/resale-tracker-data` repository, and manually run its **Apply private data batch** Actions workflow.
-6. Download `current/resale-data.v2.json` from the private repository and import it into the app to confirm the committed revision. A local change is not called persistent until that snapshot confirms it.
+4. Approve only reviewed conflicts, then confirm the import. The approved changes enter the normal automatic cloud-save queue.
+5. Wait for the compact sync indicator to show **Saved · Rev N**. A local edit or approved import is not persistent until the Worker confirms the canonical revision.
+6. If the app reports a conflict or failed save, keep the app open, retry the cloud read, and review the reconciliation. Advanced manual backup and recovery controls remain under Imports.
 
 Never include GitHub tokens, secrets, or the private snapshot in a ChatGPT prompt or in the public app repository.

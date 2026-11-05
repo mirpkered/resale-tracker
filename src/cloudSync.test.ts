@@ -35,6 +35,11 @@ describe('automatic cloud sync adapter', () => {
     expect(requiresCloudMergeReview(local, localLegacyInventory(), true, false)).toBe(false)
   })
 
+  it('never proposes uploading an empty new device over existing cloud inventory', () => {
+    expect(requiresCloudMergeReview(blankData(), localLegacyInventory(), true, false)).toBe(false)
+    expect(requiresCloudMergeReview(blankData(), blankData(), false, true)).toBe(false)
+  })
+
   it('keeps exact records once and reports changed same-ID rows as conflicts', () => {
     const local = localLegacyInventory(), cloud = localLegacyInventory()
     cloud.items[0] = { ...cloud.items[0], title: 'Cloud-edited title' }

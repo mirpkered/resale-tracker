@@ -1,6 +1,6 @@
-# Resale Tracker v0.5 — Automatic cloud sync setup
+# Resale Tracker v0.6.1 — Automatic cloud sync and iPhone installation
 
-This guide describes the secure automatic-sync architecture and the remaining one-time account setup. The frontend and backend code are implemented, but automatic sync is not operational until a GitHub App is registered, its credentials are stored as Cloudflare Worker secrets, and the Worker-hosted app is used. The public GitHub Pages copy remains a local/manual recovery view because GitHub Pages cannot securely host the OAuth callback or same-origin session cookie.
+The Cloudflare Worker and GitHub App are configured for the private `mirpkered/resale-tracker-data` repository. Open the Worker app for authenticated inventory and automatic sync. GitHub Pages cannot securely host this cookie-backed authentication flow and is a recovery frontend that links to the Worker.
 
 ## Selected architecture
 
@@ -25,27 +25,22 @@ Cloudflare Worker + static assets ── short-lived GitHub App user token ─�
 
 Cloudflare Workers has a no-charge plan with a published 100,000 incoming requests per day limit; GitHub API limits also apply. The app is designed for one account and modest personal inventory, and makes no paid-plan assumption. Check Cloudflare's [current Workers limits](https://developers.cloudflare.com/workers/platform/limits/) and [pricing](https://developers.cloudflare.com/workers/platform/pricing/) before expanding usage. GitHub's [GitHub App permission guide](https://docs.github.com/en/apps/creating-github-apps/registering-a-github-app/choosing-permissions-for-a-github-app), [user access token guide](https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/generating-a-user-access-token-for-a-github-app), and [refresh token guide](https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/refreshing-user-access-tokens) document the permission and expiry model. WebKit's [tracking prevention documentation](https://webkit.org/tracking-prevention/) documents Safari's third-party cookie restrictions.
 
-## One-time setup
+## Authentication and first launch
 
-The Worker can be deployed before credentials are added. In this state `/api/health` reports `configured: false`; sign-in and data reads/writes are disabled. No inventory is uploaded or modified.
-
-1. In Cloudflare, create an account if needed and enable its `workers.dev` subdomain. The Worker name in `worker/wrangler.jsonc` is `resale-tracker-private-sync`; after deployment its URL is `https://resale-tracker-private-sync.<your-workers-subdomain>.workers.dev/`.
-2. Create a **GitHub App** under your personal account's Developer settings. Set its homepage URL to the Worker URL and its callback URL to `https://resale-tracker-private-sync.<your-workers-subdomain>.workers.dev/api/auth/callback`. Keep expiring user tokens enabled and turn on **Enable Device Flow** under **Identifying and authorizing users**. GitHub documents this toggle in [Modifying a GitHub App registration](https://docs.github.com/en/apps/maintaining-github-apps/modifying-a-github-app-registration).
-3. Set repository permissions to **Contents: Read and write**; keep Metadata at its default read access. Choose **Only on this account** for installation availability. Install it on **Only select repositories** and select `resale-tracker-data` only. Do not install it on `resale-tracker` unless GitHub requires it for OAuth setup; this app only reads/writes private data.
-4. In Cloudflare Worker settings, add encrypted secrets named `GITHUB_APP_CLIENT_ID`, `GITHUB_APP_CLIENT_SECRET`, and `SESSION_ENCRYPTION_KEY`. Get the Client ID and generate a new Client Secret in GitHub App settings. For the encryption key, use a password manager's random generator with at least 48 random characters, or create 32 random bytes encoded as base64. Never reuse a GitHub credential as the encryption key.
-5. Open `https://<worker-url>/api/health`. Confirm it reports `configured: true`. Then open the Worker app on the iPhone and choose **Sign in with GitHub**. Tap **Create a GitHub sign-in code**, open GitHub's device authorization page, enter the displayed one-time code, and approve the app. Return to the Resale Tracker tab and tap **Check authorization**. GitHub's [device flow guide](https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/generating-a-user-access-token-for-a-github-app#using-the-device-flow-to-generate-a-user-access-token) describes the approval steps. The Worker verifies the account and repository access before creating a session.
-6. Set up future deployments from GitHub Actions: create a Cloudflare API token scoped to this Worker with the minimum Workers **Editor** role; add it as the app repository Actions secret `CLOUDFLARE_API_TOKEN`. Add `CLOUDFLARE_ACCOUNT_ID` as a repository variable and `CLOUDFLARE_DEPLOY_ENABLED=true` as a variable. The workflow `.github/workflows/deploy-worker.yml` tests every change and deploys only after this flag is enabled. Cloudflare documents the [GitHub Actions token setup](https://developers.cloudflare.com/workers/ci-cd/external-cicd/github-actions/) and [Worker role scopes](https://developers.cloudflare.com/workers/authorization/workers/).
+1. Open `https://resale-tracker-private-sync.mirpkered.workers.dev/`. If signed out, choose **Sign in with GitHub**, approve the one-time Device Flow code, and return to the app. The app checks the account and reads the canonical snapshot before displaying inventory.
+2. On an iPhone, if the existing green-basket home-screen icon opens a stale or Pages version, remove that shortcut. Open the Worker URL above in the browser, sign in, then use the browser's **Add to Home Screen** action. The installed app will launch from the Worker origin. iOS standalone storage and cookies can be separate from a browser tab, so sign in within the installed app if prompted.
+3. Empty local storage is never uploaded automatically over a cloud snapshot. The app loads the canonical revision first; if a previously used local workspace has changes, it asks for an explicit reconciliation.
+4. For future deployments, the existing workflow `.github/workflows/deploy-worker.yml` uses the configured Cloudflare GitHub Actions token and variables. Keep GitHub App credentials in encrypted Worker secrets only.
 
 Client ID/secret and session key belong in Cloudflare's Worker secret store, not GitHub Actions, the browser, or source code. Only the narrowly scoped deployment token belongs in GitHub Actions secrets.
 
-## Preserve and move the existing iPhone workspace
+## GitHub Pages recovery copy
 
-Browser storage is isolated by origin. The GitHub Pages origin cannot be read by the Worker origin, and the app does not attempt to copy it through JavaScript or a URL. This one-time move requires a private backup file; normal edits and imports after setup sync automatically.
+Browser storage is isolated by origin. The Pages origin cannot read Worker local storage. The private GitHub repository is canonical; normal authenticated use loads from that cloud snapshot, not from Pages local storage.
 
-1. On the current GitHub Pages app on the iPhone, open **Imports → Advanced backup and manual GitHub recovery → Download backup**. This exports the personal workspace to a JSON file on the device. Demo data is rejected by the exporter. Keep this backup private; do not upload it to ChatGPT, commit it to GitHub, or send it to a public service.
-2. Open the Worker URL in Safari and sign in. Create a **Personal workspace** if this new origin starts in demo mode. Demo records remain separate and are never included in a migration.
-3. Choose **Review device backup**, select the backup file, and inspect the reconciliation. It previews additions, exact matches, possible duplicates, changed IDs, purchase investment, available quantities, asking value, confirmed cash, and realized profit. Resolve every conflict explicitly.
-4. Press **Approve merge & save to GitHub**. The app rechecks the cloud revision, merges records by stable IDs, commits a new revision and backup, and verifies the canonical snapshot. Reload the Worker app and confirm its revision and records before removing the downloaded backup.
+1. Open the GitHub Pages app, then use its sign-in recovery link to open the Worker. Pages does not hold or migrate private inventory automatically.
+2. If you have an older device backup that is not in the private repository, sign in to the Worker and use **Imports → Review device backup**. Inspect all matching records and financial changes before approving.
+3. The Worker rechecks the revision, creates a backup, and verifies the committed canonical snapshot before showing Saved.
 
 Compare the preview with the existing source workspace and supporting records before approving. Check the original purchase, remaining and disposed quantities, item-level details, and all recorded proceeds. The app never synthesizes records. If expected records are absent from the backup, stop and reconcile the source workspace before approving.
 
@@ -58,4 +53,4 @@ The private repository currently remains unchanged by this setup work. Its canon
 - The previous snapshot is saved under `backups/` in the same Git commit as the current snapshot update. Repository history remains available for recovery.
 - A GitHub authorization lasts about eight hours per access token and can be renewed for up to six months with the refresh token. After that, sign in again.
 - The existing `https://mirpkered.github.io/resale-tracker/` URL cannot provide this cookie-backed auth flow. It remains an unconnected frontend and manual recovery path. Use the Worker URL as the daily app, or later set a custom domain that serves the Worker on the desired domain.
-- The Worker backend has unit and mocked GitHub API coverage but awaits real GitHub App credentials. Automatic sign-in/read/write/reload is **not verified or operational** until setup and an authenticated end-to-end check complete.
+- iPhone home-screen installs use the Worker origin. If GitHub authorization has expired, sign in again from that installed app; never rely on a Chrome tab's local storage or cookie being shared.

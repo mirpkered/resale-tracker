@@ -1,26 +1,34 @@
 import type { TrackerData } from './domain'
-import { DEMO_KEY, loadDemo } from './demo'
 
 export const WORKSPACE_KEY = 'resale-tracker-workspace-v2'
-export type WorkspaceMode = 'demo' | 'personal'
+const EXPLICIT_SIGN_OUT_KEY = 'resale-tracker-explicit-sign-out-v1'
 export interface SyncBatch { format: 'resale-tracker-sync-batch'; schemaVersion: '1.0'; batchId: string; baseRevision: number; createdAt: string; data: TrackerData }
 export interface RemoteDocument { schemaVersion: '2.0'; revision: number; updatedAt: string; importedBatches: Array<{ batchId: string }>; data: TrackerData }
-export interface LocalWorkspace { mode: WorkspaceMode; data: TrackerData; baseRevision: number; baseline: string; pendingBatch?: SyncBatch; remoteCandidate?: string; lastConfirmedAt?: string }
+export interface LocalWorkspace { data: TrackerData; baseRevision: number; baseline: string; pendingBatch?: SyncBatch; remoteCandidate?: string; lastConfirmedAt?: string }
 export interface LocalBackup { format: 'resale-tracker-local-backup'; schemaVersion: '1.0'; exportedAt: string; data: TrackerData }
 export const blankData = (): TrackerData => ({ lots: [], items: [], sales: [], expenses: [], credit: [], platforms: [] })
 const serialize = (data: TrackerData) => JSON.stringify(data)
+export function hasExplicitlySignedOut(): boolean { try { return localStorage.getItem(EXPLICIT_SIGN_OUT_KEY) === '1' } catch { return false } }
+export function rememberSignOut(): void { try { localStorage.setItem(EXPLICIT_SIGN_OUT_KEY, '1') } catch { /* Session cookie remains the authoritative sign-out. */ } }
+export function clearRememberedSignOut(): void { try { localStorage.removeItem(EXPLICIT_SIGN_OUT_KEY) } catch { /* Session cookie remains the authoritative sign-in. */ } }
 
 export function loadWorkspace(): LocalWorkspace {
   try {
     const saved = localStorage.getItem(WORKSPACE_KEY)
-    if (saved) return JSON.parse(saved) as LocalWorkspace
-  } catch { /* Invalid local metadata is ignored; prior demo data remains intact. */ }
-  const data = loadDemo()
-  return { mode: 'demo', data, baseRevision: 0, baseline: serialize(data) }
+    if (saved) {
+      const workspace = JSON.parse(saved) as LocalWorkspace & { mode?: string }
+      if ((workspace.mode === undefined || workspace.mode === 'personal') && workspace.data && Number.isSafeInteger(workspace.baseRevision) && typeof workspace.baseline === 'string') {
+        delete workspace.mode
+        return workspace
+      }
+    }
+  } catch { /* Invalid or legacy sample state is replaced with an empty private workspace. */ }
+  const workspace = createEmptyWorkspace()
+  saveWorkspace(workspace)
+  return workspace
 }
 export function saveWorkspace(workspace: LocalWorkspace) { localStorage.setItem(WORKSPACE_KEY, JSON.stringify(workspace)) }
 export function exportLocalBackup(workspace: LocalWorkspace, exportedAt = new Date().toISOString()): LocalBackup {
-  if (workspace.mode !== 'personal') throw new Error('Demo data cannot be exported as a personal backup.')
   parseRemoteDocument(JSON.stringify({ schemaVersion: '2.0', revision: workspace.baseRevision, updatedAt: exportedAt, importedBatches: [], data: workspace.data }))
   return { format: 'resale-tracker-local-backup', schemaVersion: '1.0', exportedAt, data: workspace.data }
 }
@@ -30,21 +38,19 @@ export function parseLocalBackup(text: string): LocalBackup {
   parseRemoteDocument(JSON.stringify({ schemaVersion: '2.0', revision: 0, updatedAt: backup.exportedAt, importedBatches: [], data: backup.data }))
   return backup
 }
-export function startPersonalWorkspace(): LocalWorkspace {
+export function createEmptyWorkspace(): LocalWorkspace {
   const data = blankData()
-  const workspace: LocalWorkspace = { mode: 'personal', data, baseRevision: 0, baseline: serialize(data) }
+  const workspace: LocalWorkspace = { data, baseRevision: 0, baseline: serialize(data) }
   saveWorkspace(workspace)
   return workspace
 }
 export function withLocalData(workspace: LocalWorkspace, data: TrackerData): LocalWorkspace {
   const next = { ...workspace, data }
   saveWorkspace(next)
-  if (workspace.mode === 'demo') localStorage.setItem(DEMO_KEY, JSON.stringify(data))
   return next
 }
-export function isWorkspaceDirty(workspace: LocalWorkspace) { return workspace.mode === 'personal' && serialize(workspace.data) !== workspace.baseline }
+export function isWorkspaceDirty(workspace: LocalWorkspace) { return serialize(workspace.data) !== workspace.baseline }
 export function exportPendingBatch(workspace: LocalWorkspace) {
-  if (workspace.mode !== 'personal') throw new Error('Start a personal workspace before preparing a GitHub sync batch. Demo data cannot be synchronized.')
   const pendingBatch = workspace.pendingBatch && serialize(workspace.pendingBatch.data) === serialize(workspace.data) ? workspace.pendingBatch : { format: 'resale-tracker-sync-batch' as const, schemaVersion: '1.0' as const, batchId: crypto.randomUUID(), baseRevision: workspace.baseRevision, createdAt: new Date().toISOString(), data: workspace.data }
   const next = { ...workspace, pendingBatch }
   saveWorkspace(next)
@@ -58,7 +64,7 @@ export function receiveRemoteDocument(workspace: LocalWorkspace, text: string): 
   const localMatchesRemote = serialize(workspace.data) === serialize(remote.data)
   if ((dirty && (remote.revision !== workspace.baseRevision || serialize(remote.data) !== workspace.baseline) && !localMatchesRemote && !(acknowledged && pendingMatchesLocal)) || remote.revision < workspace.baseRevision) return { workspace: { ...workspace, remoteCandidate: text }, conflict: true, acknowledged: false }
   const data = remote.data
-  const next: LocalWorkspace = { mode: 'personal', data, baseRevision: remote.revision, baseline: serialize(data), lastConfirmedAt: remote.updatedAt, pendingBatch: undefined, remoteCandidate: undefined }
+  const next: LocalWorkspace = { data, baseRevision: remote.revision, baseline: serialize(data), lastConfirmedAt: remote.updatedAt, pendingBatch: undefined, remoteCandidate: undefined }
   saveWorkspace(next)
   return { workspace: next, conflict: false, acknowledged }
 }
@@ -66,7 +72,7 @@ export function discardLocalAndLoadRemote(workspace: LocalWorkspace): LocalWorks
   if (!workspace.remoteCandidate) throw new Error('There is no remote conflict document to load.')
   const remote = parseRemoteDocument(workspace.remoteCandidate)
   const data = remote.data
-  const next: LocalWorkspace = { mode: 'personal', data, baseRevision: remote.revision, baseline: serialize(data), lastConfirmedAt: remote.updatedAt }
+  const next: LocalWorkspace = { data, baseRevision: remote.revision, baseline: serialize(data), lastConfirmedAt: remote.updatedAt }
   saveWorkspace(next)
   return next
 }

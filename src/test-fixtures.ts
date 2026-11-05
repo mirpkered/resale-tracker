@@ -1,8 +1,7 @@
 import type { TrackerData } from './domain'
 import { PLATFORMS } from './domain'
 
-export const DEMO_KEY = 'resale-tracker-demo-v1'
-export const demoData: TrackerData = {
+export const sampleFixture: TrackerData = {
   lots: [
     { id: 'lot-dvd', name: 'Media Collection Purchase', date: '2025-06-12', source: 'Local thrift store', purchaseCents: 1800, expensesCents: 0 },
     { id: 'lot-bins', name: 'Clothing & Games Purchase', date: '2025-06-18', source: 'Community sale', purchaseCents: 2750, expensesCents: 0 },
@@ -18,12 +17,3 @@ export const demoData: TrackerData = {
   ],
   expenses: [], credit: [], platforms: PLATFORMS,
 }
-
-export function loadDemo(): TrackerData {
-  try {
-    const saved = localStorage.getItem(DEMO_KEY)
-    if (saved) return { ...demoData, ...JSON.parse(saved) as TrackerData }
-  } catch { /* use the deterministic sample state if local browser data is invalid */ }
-  return structuredClone(demoData)
-}
-export function saveDemo(data: TrackerData) { localStorage.setItem(DEMO_KEY, JSON.stringify(data)) }

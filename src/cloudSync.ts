@@ -2,7 +2,7 @@ import type { TrackerData } from './domain'
 import type { RemoteDocument, SyncBatch } from './storage'
 
 export type CloudSession = { authenticated: true; login: string; expiresAt: number }
-export type CloudSyncStatus = 'signed_out' | 'workspace_required' | 'loading' | 'needs_merge' | 'saved' | 'saving' | 'offline' | 'unsynced' | 'failed' | 'conflict' | 'reauthorize'
+export type CloudSyncStatus = 'signed_out' | 'loading' | 'needs_merge' | 'saved' | 'saving' | 'offline' | 'unsynced' | 'failed' | 'conflict' | 'reauthorize'
 export type MergeChoice = 'local' | 'cloud'
 export type MergeConflict = { collection: keyof TrackerData; id: string; cloudId: string; title: string; reason: 'changed_record' | 'possible_duplicate' }
 export type MergePreview = { data: TrackerData; added: Array<{ collection: keyof TrackerData; id: string; title: string }>; existing: number; conflicts: MergeConflict[]; duplicateImports: number }

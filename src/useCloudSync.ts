@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { applyCloudMerge, CloudSyncError, GitHubCloudStorageAdapter, previewCloudMerge, requiresCloudMergeReview, type CloudSession, type CloudSyncStatus, type MergeChoice, type MergePreview } from './cloudSync'
 import type { TrackerData } from './domain'
-import { exportPendingBatch, isWorkspaceDirty, receiveRemoteDocument, saveWorkspace, withLocalData, type LocalWorkspace, type RemoteDocument } from './storage'
+import { clearRememberedSignOut, exportPendingBatch, isWorkspaceDirty, receiveRemoteDocument, rememberSignOut, saveWorkspace, withLocalData, type LocalWorkspace, type RemoteDocument } from './storage'
 
 const enabled = import.meta.env.VITE_AUTO_SYNC_ENABLED === '1'
 const serialize = (data: TrackerData) => JSON.stringify(data)
@@ -40,7 +40,6 @@ export function useCloudSync(workspace: LocalWorkspace, setWorkspace: (workspace
     const loaded = await adapter.load()
     const current = workspaceRef.current
     setRevision(loaded.document.revision); setLastSavedAt(loaded.syncConfirmedAt)
-    if (current.mode !== 'personal') { setStatus('workspace_required'); setError('GitHub is connected. Create a personal workspace to load private inventory; demo data stays separate.'); return }
     const dirty = isWorkspaceDirty(current), remoteChanged = current.baseRevision !== loaded.document.revision || current.baseline !== serialize(loaded.document.data)
     const firstEmptyConnection = current.baseRevision === 0 && loaded.document.revision === 0
     if (requiresCloudMergeReview(current.data, loaded.document.data, remoteChanged, firstEmptyConnection)) {
@@ -53,29 +52,38 @@ export function useCloudSync(workspace: LocalWorkspace, setWorkspace: (workspace
 
   const connect = useCallback(() => { window.location.assign('/api/auth/start') }, [])
   const signOut = useCallback(async () => {
+    rememberSignOut()
     try { await adapter.signOut() } finally { sessionRef.current = null; setSession(null); setMerge(null); setStatus('signed_out'); setError('Signed out. This browser’s local records remain in place.') }
   }, [adapter])
+
+  const checkConnection = useCallback(async () => {
+    if (!enabled) return
+    setStatus('loading'); setError('')
+    try {
+      const health = await adapter.health(); setConfigured(health.configured)
+      if (!health.configured) { sessionRef.current = null; setSession(null); setStatus('signed_out'); setError('Private GitHub sign-in is not configured on this service.'); return }
+      const current = await adapter.session()
+      if (!current) { sessionRef.current = null; setSession(null); setStatus('signed_out'); return }
+      clearRememberedSignOut()
+      sessionRef.current = current; setSession(current)
+      await loadRemote('initial')
+    } catch (cause) {
+      setStatus(!navigator.onLine ? 'offline' : cause instanceof CloudSyncError && cause.status === 401 ? 'reauthorize' : 'failed')
+      setError(!navigator.onLine ? 'Offline. The last confirmed inventory remains on this device when available.' : cause instanceof Error ? cause.message : 'Could not load private GitHub data.')
+    }
+  }, [adapter, loadRemote])
 
   useEffect(() => {
     if (!enabled || initializedRef.current) return
     initializedRef.current = true
-    void (async () => {
-      try {
-        const health = await adapter.health(); setConfigured(health.configured)
-        if (!health.configured) { setStatus('signed_out'); setError('The secure backend is deployed but awaits GitHub App setup. No inventory has been sent.'); return }
-        const current = await adapter.session()
-        if (!current) { setStatus('signed_out'); return }
-        sessionRef.current = current; setSession(current)
-        await loadRemote('initial')
-      } catch (cause) {
-        setStatus(cause instanceof CloudSyncError && cause.status === 401 ? 'reauthorize' : 'failed')
-        setError(cause instanceof Error ? cause.message : 'Could not load private GitHub data.')
-      }
-    })()
-  }, [adapter, loadRemote])
+    void checkConnection()
+  }, [checkConnection])
+  useEffect(() => {
+    if (enabled && online && status === 'offline') void checkConnection()
+  }, [checkConnection, online, status])
 
   const saveNow = useCallback(async () => {
-    if (!enabled || !sessionRef.current || savingRef.current || !online || workspaceRef.current.mode !== 'personal' || merge) return
+    if (!enabled || !sessionRef.current || savingRef.current || !online || merge) return
     const starting = workspaceRef.current
     if (!isWorkspaceDirty(starting)) { setStatus('saved'); return }
     savingRef.current = true; setStatus('saving'); setError('')
@@ -93,7 +101,7 @@ export function useCloudSync(workspace: LocalWorkspace, setWorkspace: (workspace
       }
     } catch (cause) {
       const current = workspaceRef.current
-      if (cause instanceof CloudSyncError && cause.status === 401) { setStatus('reauthorize'); setError('GitHub authorization expired. Sign in again; your local edits are preserved.') }
+      if (cause instanceof CloudSyncError && cause.status === 401) { sessionRef.current = null; setSession(null); setStatus('reauthorize'); setError('GitHub authorization expired. Sign in again; your local edits are preserved.') }
       else if (cause instanceof CloudSyncError && cause.status === 409) {
         try {
           const latest = await adapter.load()
@@ -107,7 +115,7 @@ export function useCloudSync(workspace: LocalWorkspace, setWorkspace: (workspace
   }, [adapter, merge, online, setData, setWorkspace])
 
   useEffect(() => {
-    if (!enabled || !session || !online || workspace.mode !== 'personal' || merge || !isWorkspaceDirty(workspace)) {
+    if (!enabled || !session || !online || merge || !isWorkspaceDirty(workspace)) {
       if (enabled && !online && session && isWorkspaceDirty(workspace)) setStatus('offline')
       return
     }
@@ -119,7 +127,6 @@ export function useCloudSync(workspace: LocalWorkspace, setWorkspace: (workspace
   const approveMerge = useCallback(async () => {
     if (!merge || !sessionRef.current) return
     const current = workspaceRef.current
-    if (current.mode !== 'personal') return
     const fresh = await adapter.load()
     if (fresh.document.revision !== merge.remote.revision) {
       const next = { preview: previewCloudMerge(merge.localData, fresh.document.data), remote: fresh.document, source: 'conflict' as const, localSnapshot: merge.localSnapshot, workspaceSnapshot: merge.workspaceSnapshot, localData: merge.localData }
@@ -146,12 +153,12 @@ export function useCloudSync(workspace: LocalWorkspace, setWorkspace: (workspace
   }, [loadRemote])
 
   const reviewLocalBackup = useCallback(async (localData: TrackerData) => {
-    if (!sessionRef.current || workspaceRef.current.mode !== 'personal') throw new Error('Sign in and create a personal workspace before importing a device backup.')
+    if (!sessionRef.current) throw new Error('Sign in before importing a device backup.')
     const current = workspaceRef.current, loaded = await adapter.load()
     setRevision(loaded.document.revision); setLastSavedAt(loaded.syncConfirmedAt)
     setMerge({ preview: previewCloudMerge(localData, loaded.document.data), remote: loaded.document, source: 'initial', localSnapshot: serialize(localData), workspaceSnapshot: serialize(current.data), localData })
     setChoices({}); setStatus('needs_merge'); setError('Review the imported device backup before syncing it.')
   }, [adapter])
 
-  return { enabled, configured, session, status, merge, choices, setChoice: (key: string, value: MergeChoice) => setChoices((current) => ({ ...current, [key]: value })), approveMerge, connect, signOut, reviewLatest, refresh: () => loadRemote('initial'), reviewLocalBackup, error, revision, lastSavedAt }
+  return { enabled, configured, session, status, merge, choices, setChoice: (key: string, value: MergeChoice) => setChoices((current) => ({ ...current, [key]: value })), approveMerge, connect, signOut, reviewLatest, refresh: () => loadRemote('initial'), retry: checkConnection, reviewLocalBackup, error, revision, lastSavedAt }
 }

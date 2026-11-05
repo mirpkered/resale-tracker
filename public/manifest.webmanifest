@@ -2,6 +2,7 @@
   "name": "Resale Tracker",
   "short_name": "Resale",
   "description": "Personal resale inventory and profit tracking",
+  "id": "./",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
