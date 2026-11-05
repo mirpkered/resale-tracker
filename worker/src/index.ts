@@ -171,8 +171,13 @@ async function readJsonLimited<T>(request: Request, maxBytes: number): Promise<T
 async function tokenRequest(body: URLSearchParams, grantType: 'authorization_code' | 'refresh_token') {
   if (grantType === 'refresh_token') body.set('grant_type', 'refresh_token')
   const response = await fetch('https://github.com/login/oauth/access_token', { method: 'POST', headers: { Accept: 'application/json', 'Content-Type': 'application/x-www-form-urlencoded' }, body: body.toString() })
-  const token = await response.json() as Record<string, unknown>
-  if (!response.ok || typeof token.access_token !== 'string' || typeof token.refresh_token !== 'string') throw new Error('Unauthorized: GitHub did not issue a renewable session. Sign in again.')
+  const token = await response.json().catch(() => null) as Record<string, unknown> | null
+  if (!response.ok) {
+    const code = typeof token?.error === 'string' && /^[a-z0-9_]+$/i.test(token.error) ? token.error : `http_${response.status}`
+    throw new Error(`Unauthorized: GitHub token exchange failed (${code}). Sign in again.`)
+  }
+  if (typeof token?.access_token !== 'string') throw new Error('Unauthorized: GitHub token response is missing an access token.')
+  if (typeof token.refresh_token !== 'string') throw new Error('Unauthorized: GitHub token response is missing a refresh token. Confirm the offline_access request or expiring user access token setting.')
   return token as { access_token: string; refresh_token: string; expires_in?: number; refresh_token_expires_in?: number }
 }
 

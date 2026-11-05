@@ -126,6 +126,30 @@ describe('private GitHub Worker authentication boundary', () => {
     expect(errorLog).toHaveBeenCalledOnce()
   })
 
+  it('reports a safe GitHub OAuth rejection code without exposing the provider description', async () => {
+    const started = await worker.fetch(new Request('https://sync.example.workers.dev/api/auth/start'), env)
+    const stateCookie = currentCookie(started.headers.get('set-cookie')!)
+    const oauth = new URL(started.headers.get('location')!).searchParams
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(response({ error: 'incorrect_client_credentials', error_description: 'never echo provider details' }, 401)))
+    const callback = await worker.fetch(new Request(`https://sync.example.workers.dev/api/auth/callback?code=oauth-code&state=${oauth.get('state')}`, { headers: { Cookie: stateCookie } }), env)
+    const body = await callback.json() as { message: string }
+    expect(callback.status).toBe(401)
+    expect(body.message).toContain('(incorrect_client_credentials)')
+    expect(body.message).not.toContain('never echo provider details')
+  })
+
+  it('identifies a missing refresh token without returning credential values', async () => {
+    const started = await worker.fetch(new Request('https://sync.example.workers.dev/api/auth/start'), env)
+    const stateCookie = currentCookie(started.headers.get('set-cookie')!)
+    const oauth = new URL(started.headers.get('location')!).searchParams
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(response({ access_token: 'ghu-test-token', expires_in: 28800 }, 200)))
+    const callback = await worker.fetch(new Request(`https://sync.example.workers.dev/api/auth/callback?code=oauth-code&state=${oauth.get('state')}`, { headers: { Cookie: stateCookie } }), env)
+    const body = await callback.json() as { message: string }
+    expect(callback.status).toBe(401)
+    expect(body.message).toContain('missing a refresh token')
+    expect(body.message).not.toContain('ghu-test-token')
+  })
+
   it('rotates an expiring GitHub access token on the backend and returns a replacement cookie', async () => {
     const cookieValue = await sealWorkerSession({ login: 'mirpkered', accessToken: 'ghu-old', refreshToken: 'ghr-old', accessExpiresAt: Date.now() - 1000, refreshExpiresAt: Date.now() + 100_000 }, key)
     const fetchMock = vi.fn().mockResolvedValue(response({ access_token: 'ghu-new', refresh_token: 'ghr-new', expires_in: 28800, refresh_token_expires_in: 15897600 }))
