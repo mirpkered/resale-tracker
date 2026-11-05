@@ -205,7 +205,7 @@ async function commitBatch(env: Env, session: AuthSession, batch: SyncBatch) {
 }
 
 async function githubApi<T extends object>(path: string, token: string, init: RequestInit = {}): Promise<T> {
-  const response = await fetch(`https://api.github.com${path}`, { ...init, headers: { Accept: 'application/vnd.github+json', Authorization: `Bearer ${token}`, 'X-GitHub-Api-Version': API_VERSION, 'Content-Type': 'application/json', ...init.headers } })
+  const response = await fetch(`https://api.github.com${path}`, { ...init, headers: { Accept: 'application/vnd.github+json', Authorization: `Bearer ${token}`, 'User-Agent': 'ResaleTracker/0.5', 'X-GitHub-Api-Version': API_VERSION, 'Content-Type': 'application/json', ...init.headers } })
   if (!response.ok) {
     if (response.status === 401) throw new Error('Unauthorized: GitHub access expired; sign in again.')
     if (response.status === 409 || response.status === 422) throw new Error(`Revision conflict: GitHub rejected a stale write (${response.status}). Reload and reconcile.`)

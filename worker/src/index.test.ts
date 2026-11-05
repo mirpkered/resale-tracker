@@ -132,6 +132,8 @@ describe('private GitHub Worker authentication boundary', () => {
     expect(approved.headers.get('set-cookie')).toContain('rt_github_session=')
     expect(approved.headers.get('set-cookie')).toContain('HttpOnly; Secure; SameSite=Lax')
     expect(approved.headers.get('set-cookie')).not.toContain('ghu-device-token')
+    expect((fetchMock.mock.calls[2][1]?.headers as Record<string, string>)['User-Agent']).toBe('ResaleTracker/0.5')
+    expect((fetchMock.mock.calls[2][1]?.headers as Record<string, string>)['Authorization']).toBe('Bearer ghu-device-token')
   })
 
   it('handles pending, slow_down, expired, and denied device authorization replies', async () => {
