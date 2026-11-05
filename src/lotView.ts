@@ -1,4 +1,4 @@
-import { ACTIVE_STATUSES, allocateCents, isFieldConfirmed, lineNetProceedsCents, lotTotalCents, receivedCashCents, retainedCostCents, type InventoryItem, type LedgerTransaction, type PurchaseLot, type Sale, type TrackerData } from './domain'
+import { ACTIVE_STATUSES, allocateCents, isFieldConfirmed, lineNetProceedsCents, receivedCashCents, retainedCostCents, type InventoryItem, type LedgerTransaction, type PurchaseLot, type Sale, type TrackerData } from './domain'
 
 export const PRIMARY_NAVIGATION = ['Dashboard', 'Lots', 'Settings'] as const
 
@@ -77,7 +77,7 @@ export function summarizeLot(data: TrackerData, lot: PurchaseLot): LotSummary {
   sold += ledger.sold
   grossConfirmedSalesCents += ledger.grossCents
   cashReceivedCents += ledger.cashCents
-  const cost = lotTotalCents(lot)
+  const cost = (isFieldConfirmed(lot, 'purchaseCents') ? lot.purchaseCents : 0) + (isFieldConfirmed(lot, 'expensesCents') ? lot.expensesCents : 0)
   return { lot, purchased, sold, remaining, grossConfirmedSalesCents, cashReceivedCents, cashPositionCents: cashReceivedCents - cost, itemCount: items.length }
 }
 

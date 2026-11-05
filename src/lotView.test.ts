@@ -55,6 +55,13 @@ describe('lot-first inventory view', () => {
     expect(data).toEqual(before)
   })
 
+  it('does not subtract estimated lot costs from a cash position', () => {
+    const data = halloween()
+    data.lots[0].fieldVerification = { purchaseCents: 'estimated' }
+    const summary = summarizeLot(data, data.lots[0])
+    expect(summary.cashPositionCents).toBe(0)
+  })
+
   it('keeps duplicate copies as separate units while showing item quantity', () => {
     const data = halloween()
     data.items[0].quantity = 2
