@@ -95,6 +95,23 @@ describe('private GitHub Worker authentication boundary', () => {
     expect(result.status).toBe(400); expect(fetchMock).not.toHaveBeenCalled()
   })
 
+  it('distinguishes a GitHub authorization denial from a callback missing OAuth parameters', async () => {
+    const denied = await worker.fetch(new Request('https://sync.example.workers.dev/api/auth/callback?error=access_denied&error_description=User%20denied'), env)
+    const missing = await worker.fetch(new Request('https://sync.example.workers.dev/api/auth/callback'), env)
+    const deniedMessage = await denied.text()
+    expect(denied.status).toBe(400)
+    expect(deniedMessage).toContain('authorization was denied or cancelled')
+    expect(deniedMessage).not.toContain('User denied')
+    expect(missing.status).toBe(400)
+    expect(await missing.text()).toContain('without the required authorization code or state')
+  })
+
+  it('identifies when the browser omits the temporary OAuth state cookie', async () => {
+    const result = await worker.fetch(new Request('https://sync.example.workers.dev/api/auth/callback?code=oauth-code&state=oauth-state'), env)
+    expect(result.status).toBe(400)
+    expect(await result.text()).toContain('did not return the temporary sign-in cookie')
+  })
+
   it('exchanges a valid OAuth callback and keeps GitHub tokens encrypted in HttpOnly cookies', async () => {
     const started = await worker.fetch(new Request('https://sync.example.workers.dev/api/auth/start'), env)
     const stateCookie = currentCookie(started.headers.get('set-cookie')!)

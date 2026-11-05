@@ -67,7 +67,9 @@ async function startOAuth(request: Request, env: RuntimeEnv): Promise<Response> 
 async function finishOAuth(request: Request, env: RuntimeEnv): Promise<Response> {
   const url = new URL(request.url), code = url.searchParams.get('code'), state = url.searchParams.get('state')
   const stateCookie = readCookie(request, STATE_COOKIE)
-  if (!code || !state || !stateCookie) return new Response('GitHub sign-in was cancelled. Return to Resale Tracker and try again.', { status: 400 })
+  if (url.searchParams.has('error')) return new Response('GitHub authorization was denied or cancelled. No session was created. Return to Resale Tracker and start sign-in again.', { status: 400 })
+  if (!code || !state) return new Response('GitHub returned to the callback without the required authorization code or state. Restart sign-in from Resale Tracker.', { status: 400 })
+  if (!stateCookie) return new Response('The browser did not return the temporary sign-in cookie. Restart sign-in in the same browser and allow cookies for this site.', { status: 400 })
   let expected: { state: string; verifier: string }
   try { expected = await unseal<{ state: string; verifier: string }>(stateCookie, env.SESSION_ENCRYPTION_KEY) } catch { return new Response('GitHub sign-in could not be verified. Restart sign-in.', { status: 400 }) }
   if (!constantTimeEqual(state, expected.state)) return new Response('GitHub sign-in could not be verified. Restart sign-in.', { status: 400 })
