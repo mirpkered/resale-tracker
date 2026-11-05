@@ -193,6 +193,7 @@
             "awaiting_fulfillment",
             "completed",
             "returned",
+            "retained",
             "traded",
             "donated",
             "disposed"

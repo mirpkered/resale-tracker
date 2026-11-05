@@ -1,4 +1,4 @@
-export type ItemStatus = 'acquired' | 'draft' | 'active' | 'reserved' | 'awaiting_payment' | 'awaiting_fulfillment' | 'completed' | 'returned' | 'traded' | 'donated' | 'disposed'
+export type ItemStatus = 'acquired' | 'draft' | 'active' | 'reserved' | 'awaiting_payment' | 'awaiting_fulfillment' | 'completed' | 'returned' | 'retained' | 'traded' | 'donated' | 'disposed'
 export type PaymentStatus = 'unpaid' | 'partial' | 'paid' | 'refunded'
 export type PlatformKind = 'sales' | 'trade_in' | 'rewards'
 export type VerificationStatus = 'confirmed' | 'estimated' | 'suggested' | 'pending' | 'unknown'
@@ -20,8 +20,8 @@ export interface TrackerData { lots: PurchaseLot[]; items: InventoryItem[]; sale
 
 export const STATUS_LABELS: Record<ItemStatus, string> = {
   acquired: 'Acquired / Unlisted', draft: 'Draft Listing', active: 'Active Listing', reserved: 'Reserved',
-  awaiting_payment: 'Sold / Awaiting Payment', awaiting_fulfillment: 'Paid / Awaiting Fulfillment', completed: 'Completed',
-  returned: 'Returned', traded: 'Traded', donated: 'Donated', disposed: 'Disposed',
+  awaiting_payment: 'Sold / Awaiting Payment', awaiting_fulfillment: 'Paid / Awaiting Fulfillment', completed: 'Sold / Complete',
+  returned: 'Returned', retained: 'Retained / Personal Use', traded: 'Traded', donated: 'Donated', disposed: 'Disposed',
 }
 export const ACTIVE_STATUSES: ItemStatus[] = ['acquired', 'draft', 'active', 'reserved', 'awaiting_payment', 'awaiting_fulfillment', 'returned']
 export const PLATFORMS: Platform[] = [
@@ -90,9 +90,12 @@ export function getMetrics(data: TrackerData) {
   const migratedSaleProfit=(data.ledgerTransactions??[]).filter((entry)=>['cash_sale','buyback_payout'].includes(entry.type)&&entry.paymentStatus==='confirmed'&&isFieldConfirmed(entry,'receivedCents')&&Boolean(entry.saleAllocatedCostCents?.length)).reduce((sum,entry)=>sum+(entry.saleAllocatedProceedsCents??[]).reduce((total,value,index)=>total+(entry.saleCostVerified?.[index]?value:0),0)-(entry.saleAllocatedCostCents??[]).reduce((total,value,index)=>total+(entry.saleCostVerified?.[index]?value:0),0),0)
   const available = data.items.filter((item) => ACTIVE_STATUSES.includes(item.status))
   const remainingCost=(item:InventoryItem)=>{const saleCost=data.sales.flatMap((sale)=>sale.lines??[]).filter((line)=>line.itemId===item.id).reduce((cost,line)=>cost+retainedCostCents(line),0),ledgerCost=(data.ledgerTransactions??[]).reduce((total,entry)=>{const index=entry.itemExternalIds?.findIndex((id)=>id===item.externalId)??-1;return total+(index>=0?entry.saleAllocatedCostCents?.[index]??0:0)},0);return Math.max(0,item.costCents-saleCost-ledgerCost)}
+  const retainedItems=data.items.filter((item)=>item.status==='retained')
   return {
     purchaseInvestmentCents, estimatedAcquisitionCostCents, netCashProceedsCents, expectedFutureProceedsCents, pendingOfferValueCents, overallCashPositionCents, realizedItemProfitCents:realizedItemProfitCents+migratedSaleProfit,
     remainingQuantity: available.reduce((sum, item) => sum + item.quantity, 0),
+    retainedQuantity: retainedItems.reduce((sum,item)=>sum+item.quantity,0),
+    retainedInventoryCostCents: retainedItems.reduce((sum,item)=>sum+(isFieldConfirmed(item,'costCents')?remainingCost(item):0),0),
     remainingInventoryCostCents: available.reduce((sum, item) => sum + (isFieldConfirmed(item,'costCents')?remainingCost(item):0), 0),
     unverifiedRemainingInventoryCostCents: available.reduce((sum,item)=>sum+(isFieldConfirmed(item,'costCents')?0:remainingCost(item)),0),
     unsoldAskingCents: available.reduce((sum, item) => sum + (isFieldConfirmed(item,'askingCents')?item.askingCents:0) * item.quantity, 0),
@@ -105,10 +108,10 @@ export function getMetrics(data: TrackerData) {
 
 export function transitionStatus(current: ItemStatus, next: ItemStatus): ItemStatus {
   const allowed: Record<ItemStatus, ItemStatus[]> = {
-    acquired: ['draft', 'active', 'traded', 'donated', 'disposed'], draft: ['acquired', 'active', 'reserved', 'traded', 'donated', 'disposed'],
-    active: ['draft', 'reserved', 'awaiting_payment', 'traded', 'donated', 'disposed'], reserved: ['active', 'awaiting_payment', 'traded', 'donated', 'disposed'],
+    acquired: ['draft', 'active', 'retained', 'traded', 'donated', 'disposed'], draft: ['acquired', 'active', 'reserved', 'retained', 'traded', 'donated', 'disposed'],
+    active: ['draft', 'reserved', 'awaiting_payment', 'retained', 'traded', 'donated', 'disposed'], reserved: ['active', 'awaiting_payment', 'retained', 'traded', 'donated', 'disposed'],
     awaiting_payment: ['active', 'awaiting_fulfillment', 'completed', 'returned'], awaiting_fulfillment: ['active', 'completed', 'returned'],
-    completed: ['returned'], returned: ['active', 'draft', 'traded', 'donated', 'disposed'], traded: [], donated: [], disposed: [],
+    completed: ['returned'], returned: ['active', 'draft', 'retained', 'traded', 'donated', 'disposed'], retained: ['acquired', 'draft', 'active', 'traded', 'donated', 'disposed'], traded: [], donated: [], disposed: [],
   }
   if (current !== next && !allowed[current].includes(next)) throw new Error(`Cannot change status from ${STATUS_LABELS[current]} to ${STATUS_LABELS[next]}.`)
   return next

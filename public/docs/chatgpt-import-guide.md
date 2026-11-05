@@ -71,7 +71,7 @@ For historical updates, include the complete record again with its original ID. 
 - `allocatedCostCents` is this item's total acquisition allocation across its copies.
 - `askingCents` is a confirmed current asking price; `suggestedAskingCents` is kept separately.
 - `quantity` is the number of copies represented. Supply a unique `unitExternalIds` entry for every tracked copy, or let the app generate internal copy IDs.
-- Supported statuses: `acquired`, `draft`, `active`, `reserved`, `awaiting_payment`, `awaiting_fulfillment`, `completed`, `returned`, `traded`, `donated`, `disposed`.
+- Supported statuses: `acquired`, `draft`, `active`, `reserved`, `awaiting_payment`, `awaiting_fulfillment`, `completed`, `returned`, `retained`, `traded`, `donated`, `disposed`. Use `retained` when an item is kept for personal use and is no longer available for sale; its cost remains reported separately from saleable inventory cost.
 
 ### Transactions
 

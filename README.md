@@ -8,6 +8,8 @@ The approved green basket artwork is stored in `public/resale-tracker-icon.png`;
 
 Inventory search covers title, description, category, platform, lifecycle status, and purchase lot. Lot, platform, category, and status filters can be combined, and the results can be sorted by title, cost, asking price, or quantity.
 
+Inventory can also be marked `retained` for personal use. Retained copies are excluded from saleable quantity and asking totals, while their confirmed allocated cost is surfaced separately. Existing migration records remain valid; the v1 import schema accepts the added status.
+
 ## Storage and security
 
 The secure app uses a Cloudflare Worker to serve both static assets and `/api/*` from one origin. GitHub OAuth callback, PKCE/state verification, private snapshot reads/writes, and encrypted HttpOnly session cookies stay on the Worker. GitHub App user tokens are never sent to browser JavaScript or saved in localStorage. The App is configured for only the private `mirpkered/resale-tracker-data` repository with Contents read/write and Metadata read access; the backend pins the owner, repository, branch, and allowed GitHub login.
