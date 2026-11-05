@@ -147,7 +147,13 @@ async function githubApi<T extends object>(path: string, token: string, init: Re
   if (!response.ok) {
     if (response.status === 401) throw new Error('Unauthorized: GitHub access expired; sign in again.')
     if (response.status === 409 || response.status === 422) throw new Error(`Revision conflict: GitHub rejected a stale write (${response.status}). Reload and reconcile.`)
-    throw new Error(`GitHub repository request failed (${response.status}).`)
+    const errorBody = await response.json().catch(() => null) as { message?: unknown; errors?: unknown } | null
+    const providerMessage = typeof errorBody?.message === 'string'
+      ? errorBody.message.replace(/[\r\n\t]+/g, ' ').replace(/\s{2,}/g, ' ').slice(0, 180)
+      : undefined
+    const requestId = response.headers.get('x-github-request-id')?.replace(/[^A-Za-z0-9:-]/g, '').slice(0, 40)
+    const details = [providerMessage, requestId ? `GitHub request ${requestId}` : undefined].filter(Boolean).join(' ')
+    throw new Error(`GitHub repository request failed at ${init.method ?? 'GET'} ${path} (${response.status})${details ? `: ${details}` : '.'}`)
   }
   return response.json() as Promise<T>
 }

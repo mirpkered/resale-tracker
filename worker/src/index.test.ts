@@ -150,6 +150,26 @@ describe('private GitHub Worker authentication boundary', () => {
     expect(body.message).not.toContain('ghu-test-token')
   })
 
+  it('returns GitHub’s sanitized reason and API route for a repository permission denial', async () => {
+    const started = await worker.fetch(new Request('https://sync.example.workers.dev/api/auth/start'), env)
+    const stateCookie = currentCookie(started.headers.get('set-cookie')!)
+    const oauth = new URL(started.headers.get('location')!).searchParams
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(response({ access_token: 'ghu-private-token', refresh_token: 'ghr-private-token', expires_in: 28800, refresh_token_expires_in: 15897600 }))
+      .mockResolvedValueOnce(response({ login: 'mirpkered' }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ message: 'Resource not accessible by integration' }), { status: 403, headers: { 'x-github-request-id': 'ABCD:1234:EF56' } }))
+    vi.stubGlobal('fetch', fetchMock)
+    const callback = await worker.fetch(new Request(`https://sync.example.workers.dev/api/auth/callback?code=oauth-code&state=${oauth.get('state')}`, { headers: { Cookie: stateCookie } }), env)
+    const body = await callback.json() as { error: string; message: string }
+    expect(callback.status).toBe(502)
+    expect(body.error).toBe('sync_failed')
+    expect(body.message).toContain('GET /repos/mirpkered/resale-tracker-data (403)')
+    expect(body.message).toContain('Resource not accessible by integration')
+    expect(body.message).toContain('GitHub request ABCD:1234:EF56')
+    expect(body.message).not.toContain('ghu-private-token')
+    expect(body.message).not.toContain('ghr-private-token')
+  })
+
   it('rotates an expiring GitHub access token on the backend and returns a replacement cookie', async () => {
     const cookieValue = await sealWorkerSession({ login: 'mirpkered', accessToken: 'ghu-old', refreshToken: 'ghr-old', accessExpiresAt: Date.now() - 1000, refreshExpiresAt: Date.now() + 100_000 }, key)
     const fetchMock = vi.fn().mockResolvedValue(response({ access_token: 'ghu-new', refresh_token: 'ghr-new', expires_in: 28800, refresh_token_expires_in: 15897600 }))
