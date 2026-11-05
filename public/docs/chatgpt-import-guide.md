@@ -32,7 +32,7 @@ The root object requires `format`, `schemaVersion`, `source`, `purchaseGroups`, 
 - Transaction: `externalId`, `type`, ISO `date`, `paymentStatus`, and verification for each supplied field. A cash sale linked to inventory also needs one `itemQuantities` value for each `itemExternalIds` entry.
 - `source.id` is required and must remain stable across every update batch from the same source. `source.name` is a human-readable label.
 
-All amounts are non-negative integer cents: `$54.78` is `5478`. Do not use dollar decimals. `verification` maps every supplied material field name to one of the statuses below.
+All amounts are non-negative integer cents: `$14.75` is `1475`. Do not use dollar decimals. `verification` maps every supplied material field name to one of the statuses below.
 
 ## Verification statuses
 
@@ -91,9 +91,9 @@ Do not import an asking price as gross or received sale money. Do not treat an o
 
 These are user-supplied reference facts, not seeded records. Validate the individual rows against original conversations/receipts before importing:
 
-- Goodwill Outlet/Bins: keep November 1, 2026 ($54.78) and November 4, 2026 ($45.37) as separate lots, linked to one Goodwill reporting group. Their combined group purchase total is $100.15; do not create a third $100.15 purchase.
-- Halloween DVD Haul: keep October 31, 2026 ($23.00) in its own lot/reporting group. Import only the 23 confirmed DVD season sets. Joan of Arcadia Season 2 remains ordinary unsold inventory. Do not import a Joan of Arcadia sale, pending transaction, or associated $3.50 amount.
-- Japanese Nintendo DS/3DS lot: the approximately $25 purchase amount is estimated/pending exact confirmation. Track 67 DS cartridges and 3 3DS cartridges as separate copy IDs. Suggested Vinted prices or listing text remain drafts until the listing is confirmed active.
+- If multiple receipts belong to one reporting group, create one lot per receipt and link them to the group. Never add a group-level purchase transaction or duplicate member-lot cost.
+- Use only records verified in the source conversation, receipts, or current app. Do not infer a sale, pending transaction, proceeds, or inventory quantity from a listing or offer suggestion.
+- For duplicate merchandise, assign a distinct stable copy ID to each physical unit. Estimated purchase costs and suggested listing values must remain marked unconfirmed until verified. Listing text remains a draft until the listing is confirmed active.
 
 The app does not automatically generate those records. The user still has to approve the final preview.
 

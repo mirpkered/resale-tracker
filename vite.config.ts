@@ -3,7 +3,7 @@ import react from '@vitejs/plugin-react'
 
 export default defineConfig({
   plugins: [react()],
-  base: '/resale-tracker/',
+  base: process.env.VITE_APP_BASE ?? '/resale-tracker/',
   test: { environment: 'node' },
   build: {
     rollupOptions: {

@@ -4,8 +4,8 @@ import { PLATFORMS } from './domain'
 export const DEMO_KEY = 'resale-tracker-demo-v1'
 export const demoData: TrackerData = {
   lots: [
-    { id: 'lot-dvd', name: 'Halloween Thrift DVD Haul', date: '2026-10-31', source: 'Thrift store', purchaseCents: 2300, expensesCents: 0 },
-    { id: 'lot-bins', name: 'Goodwill Bins Haul #2', date: '2026-11-04', source: 'Goodwill Outlet', purchaseCents: 4537, expensesCents: 0 },
+    { id: 'lot-dvd', name: 'Media Collection Purchase', date: '2025-06-12', source: 'Local thrift store', purchaseCents: 1800, expensesCents: 0 },
+    { id: 'lot-bins', name: 'Clothing & Games Purchase', date: '2025-06-18', source: 'Community sale', purchaseCents: 2750, expensesCents: 0 },
   ],
   items: [
     { id: 'item-1', title: 'Studio Ghibli DVD Collection', category: 'Movies', quantity: 1, originalQuantity: 1, lotId: 'lot-dvd', costCents: 800, askingCents: 2499, platform: 'eBay', status: 'active', listedOn: '2026-11-01', image: 'https://images.unsplash.com/photo-1489599849927-2ee91cede3ba?auto=format&fit=crop&w=600&q=80' },

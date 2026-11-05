@@ -6,6 +6,7 @@ export type WorkspaceMode = 'demo' | 'personal'
 export interface SyncBatch { format: 'resale-tracker-sync-batch'; schemaVersion: '1.0'; batchId: string; baseRevision: number; createdAt: string; data: TrackerData }
 export interface RemoteDocument { schemaVersion: '2.0'; revision: number; updatedAt: string; importedBatches: Array<{ batchId: string }>; data: TrackerData }
 export interface LocalWorkspace { mode: WorkspaceMode; data: TrackerData; baseRevision: number; baseline: string; pendingBatch?: SyncBatch; remoteCandidate?: string; lastConfirmedAt?: string }
+export interface LocalBackup { format: 'resale-tracker-local-backup'; schemaVersion: '1.0'; exportedAt: string; data: TrackerData }
 export const blankData = (): TrackerData => ({ lots: [], items: [], sales: [], expenses: [], credit: [], platforms: [] })
 const serialize = (data: TrackerData) => JSON.stringify(data)
 
@@ -18,6 +19,17 @@ export function loadWorkspace(): LocalWorkspace {
   return { mode: 'demo', data, baseRevision: 0, baseline: serialize(data) }
 }
 export function saveWorkspace(workspace: LocalWorkspace) { localStorage.setItem(WORKSPACE_KEY, JSON.stringify(workspace)) }
+export function exportLocalBackup(workspace: LocalWorkspace, exportedAt = new Date().toISOString()): LocalBackup {
+  if (workspace.mode !== 'personal') throw new Error('Demo data cannot be exported as a personal backup.')
+  parseRemoteDocument(JSON.stringify({ schemaVersion: '2.0', revision: workspace.baseRevision, updatedAt: exportedAt, importedBatches: [], data: workspace.data }))
+  return { format: 'resale-tracker-local-backup', schemaVersion: '1.0', exportedAt, data: workspace.data }
+}
+export function parseLocalBackup(text: string): LocalBackup {
+  const backup = JSON.parse(text) as LocalBackup
+  if (backup?.format !== 'resale-tracker-local-backup' || backup.schemaVersion !== '1.0' || !backup.data || typeof backup.exportedAt !== 'string') throw new Error('This is not a supported Resale Tracker local backup.')
+  parseRemoteDocument(JSON.stringify({ schemaVersion: '2.0', revision: 0, updatedAt: backup.exportedAt, importedBatches: [], data: backup.data }))
+  return backup
+}
 export function startPersonalWorkspace(): LocalWorkspace {
   const data = blankData()
   const workspace: LocalWorkspace = { mode: 'personal', data, baseRevision: 0, baseline: serialize(data) }
@@ -41,8 +53,10 @@ export function exportPendingBatch(workspace: LocalWorkspace) {
 export function receiveRemoteDocument(workspace: LocalWorkspace, text: string): { workspace: LocalWorkspace; conflict: boolean; acknowledged: boolean } {
   const remote = parseRemoteDocument(text)
   const dirty = isWorkspaceDirty(workspace)
-  if ((dirty && (remote.revision !== workspace.baseRevision || serialize(remote.data) !== workspace.baseline)) || remote.revision < workspace.baseRevision) return { workspace: { ...workspace, remoteCandidate: text }, conflict: true, acknowledged: false }
   const acknowledged = Boolean(workspace.pendingBatch && remote.importedBatches.some((entry: { batchId: string }) => entry.batchId === workspace.pendingBatch?.batchId))
+  const pendingMatchesLocal = Boolean(workspace.pendingBatch && serialize(workspace.pendingBatch.data) === serialize(workspace.data))
+  const localMatchesRemote = serialize(workspace.data) === serialize(remote.data)
+  if ((dirty && (remote.revision !== workspace.baseRevision || serialize(remote.data) !== workspace.baseline) && !localMatchesRemote && !(acknowledged && pendingMatchesLocal)) || remote.revision < workspace.baseRevision) return { workspace: { ...workspace, remoteCandidate: text }, conflict: true, acknowledged: false }
   const data = remote.data
   const next: LocalWorkspace = { mode: 'personal', data, baseRevision: remote.revision, baseline: serialize(data), lastConfirmedAt: remote.updatedAt, pendingBatch: undefined, remoteCandidate: undefined }
   saveWorkspace(next)

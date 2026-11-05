@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { demoData, DEMO_KEY } from './demo'
-import { discardLocalAndLoadRemote, exportPendingBatch, isWorkspaceDirty, loadWorkspace, receiveRemoteDocument, startPersonalWorkspace, withLocalData, WORKSPACE_KEY } from './storage'
+import { discardLocalAndLoadRemote, exportLocalBackup, exportPendingBatch, isWorkspaceDirty, loadWorkspace, parseLocalBackup, receiveRemoteDocument, startPersonalWorkspace, withLocalData, WORKSPACE_KEY } from './storage'
 
 class MemoryStorage {
   values = new Map<string, string>()
@@ -19,6 +19,13 @@ describe('browser storage adapter', () => {
     memory.setItem(DEMO_KEY, JSON.stringify(demoData))
     const demo = loadWorkspace(); expect(demo.mode).toBe('demo'); expect(demo.data.items.length).toBeGreaterThan(0)
     const personal = startPersonalWorkspace(); expect(personal.data.items).toHaveLength(0); expect(personal.data.lots).toHaveLength(0); expect(memory.getItem(DEMO_KEY)).not.toBeNull()
+    expect(() => exportLocalBackup(demo)).toThrow(/Demo data cannot be exported/)
+  })
+  it('round-trips a validated personal backup without importing it into the cloud automatically', () => {
+    const personal = startPersonalWorkspace(), data = { ...personal.data, lots: [{ id: uuid, name: 'Private test lot', date: '2026-11-04', source: 'Test', purchaseCents: 100, expensesCents: 0 }] }, edited = withLocalData(personal, data)
+    const backup = exportLocalBackup(edited, '2026-11-04T02:00:00.000Z'), restored = parseLocalBackup(JSON.stringify(backup))
+    expect(restored.data.lots).toEqual(data.lots); expect(restored.exportedAt).toBe('2026-11-04T02:00:00.000Z'); expect(isWorkspaceDirty(edited)).toBe(true)
+    expect(() => parseLocalBackup(JSON.stringify({ ...backup, data: { ...data, lots: [{ ...data.lots[0], purchaseCents: 0.5 }] } }))).toThrow(/invalid lot/)
   })
   it('marks edits local and repeats the exact batch on a retry', () => {
     const fresh = startPersonalWorkspace(); const edited = withLocalData(fresh, {...fresh.data,lots:[{id:uuid,name:'Lot',date:'2026-11-04',source:'Store',purchaseCents:1000,expensesCents:0}]})

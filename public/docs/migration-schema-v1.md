@@ -37,7 +37,7 @@ Each lot, item, and transaction needs a `verification` map. Values are `confirme
 }
 ```
 
-All money fields are non-negative **integer cents**. Use `5478` for $54.78. Do not use decimal dollar strings or binary floating point values. Unverified acquisition values do not count as confirmed cash investment; unverified asking values are shown separately from confirmed asking value. Expected offers never count as received cash.
+All money fields are non-negative **integer cents**. For example, `1475` represents $14.75. Do not use decimal dollar strings or binary floating point values. Unverified acquisition values do not count as confirmed cash investment; unverified asking values are shown separately from confirmed asking value. Expected offers never count as received cash.
 
 ## Purchase groups and lots
 
@@ -46,10 +46,10 @@ All money fields are non-negative **integer cents**. Use `5478` for $54.78. Do n
 ```json
 {
   "externalId": "lot-goodwill-2026-11-01",
-  "name": "Goodwill Outlet Haul #1",
-  "date": "2026-11-01",
-  "source": "Goodwill Outlet",
-  "purchaseCents": 5478,
+  "name": "Thrift Purchase Lot A",
+  "date": "2025-06-12",
+  "source": "Local thrift store",
+  "purchaseCents": 1475,
   "expensesCents": 0,
   "groupExternalId": "november-thrift-weekend",
   "notes": "Receipt photo reference",

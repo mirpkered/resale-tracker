@@ -1,13 +1,14 @@
 {
   "name": "resale-tracker",
   "private": true,
-  "version": "0.4.0",
+  "version": "0.5.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc -b && vite build",
+    "build": "npm run typecheck && vite build",
+    "build:worker": "npm run typecheck && cross-env VITE_APP_BASE=/ VITE_AUTO_SYNC_ENABLED=1 vite build",
     "lint": "eslint .",
-    "typecheck": "tsc -b --pretty false",
+    "typecheck": "tsc -b --pretty false && tsc --noEmit --project worker/tsconfig.json",
     "test": "vitest run",
     "preview": "vite preview"
   },
@@ -22,6 +23,7 @@
     "@types/react": "^19.1.12",
     "@types/react-dom": "^19.1.9",
     "@vitejs/plugin-react": "^5.0.2",
+    "cross-env": "^10.1.0",
     "eslint": "^9.35.0",
     "eslint-plugin-react-hooks": "^5.2.0",
     "eslint-plugin-react-refresh": "^0.4.20",
@@ -29,6 +31,12 @@
     "typescript": "~5.9.2",
     "typescript-eslint": "^8.72.1",
     "vite": "^7.1.5",
-    "vitest": "^5.1.0"
+    "vitest": "^5.1.0",
+    "wrangler": "^4.157.0"
+  },
+  "overrides": {
+    "@typescript-eslint/typescript-estree": {
+      "minimatch": "^11.0.1"
+    }
   }
 }
