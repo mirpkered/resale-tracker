@@ -60,7 +60,9 @@ async function startOAuth(request: Request, env: RuntimeEnv): Promise<Response> 
   target.searchParams.set('code_challenge', await challenge(verifier))
   target.searchParams.set('code_challenge_method', 'S256')
   const headers = new Headers({ Location: target.toString(), 'Cache-Control': 'no-store' })
-  headers.append('Set-Cookie', `${STATE_COOKIE}=${cookie}; Path=/api/auth/callback; Max-Age=600; HttpOnly; Secure; SameSite=Lax`)
+  // This temporary state cookie must survive GitHub's cross-site redirect back to the Worker.
+  // The callback still verifies the unpredictable state value and encrypted PKCE verifier.
+  headers.append('Set-Cookie', `${STATE_COOKIE}=${cookie}; Path=/; Max-Age=1800; HttpOnly; Secure; SameSite=None`)
   return new Response(null, { status: 302, headers })
 }
 
@@ -84,7 +86,7 @@ async function finishOAuth(request: Request, env: RuntimeEnv): Promise<Response>
   const sealed = await seal(session, env.SESSION_ENCRYPTION_KEY)
   const headers = new Headers({ Location: `${url.origin}/`, 'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer' })
   headers.append('Set-Cookie', `${COOKIE}=${sealed}; Path=/; Max-Age=${Math.floor((refreshExpiresAt - Date.now()) / 1000)}; HttpOnly; Secure; SameSite=Lax`)
-  headers.append('Set-Cookie', `${STATE_COOKIE}=; Path=/api/auth/callback; Max-Age=0; HttpOnly; Secure; SameSite=Lax`)
+  headers.append('Set-Cookie', `${STATE_COOKIE}=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=None`)
   return new Response(null, { status: 302, headers })
 }
 

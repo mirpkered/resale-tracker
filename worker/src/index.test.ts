@@ -68,7 +68,7 @@ describe('private GitHub Worker authentication boundary', () => {
     expect(location.searchParams.get('scope')).toBe('offline_access')
     expect(location.searchParams.get('code_challenge_method')).toBe('S256')
     expect(location.searchParams.get('code_challenge')).toMatch(/^[A-Za-z0-9_-]{43}$/)
-    expect(result.headers.get('set-cookie')).toContain('HttpOnly; Secure; SameSite=Lax')
+    expect(result.headers.get('set-cookie')).toContain('Path=/; Max-Age=1800; HttpOnly; Secure; SameSite=None')
   })
 
   it('catches asynchronous OAuth start failures instead of leaking an uncaught Worker exception', async () => {
