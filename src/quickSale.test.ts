@@ -69,5 +69,13 @@ describe('quick sale', () => {
     expect(getMetrics(corrected).netCashProceedsCents).toBe(800)
     expect(getMetrics(corrected).realizedItemProfitCents).toBe(300)
   })
+
+  it('preserves historical miscellaneous expenses when recording a new sale with no added expense', () => {
+    const initial=fixture(1200,2)
+    const prior=recordQuickSale(initial, 'game', {...input(1200), otherExpenseCents:125}, ids)
+    const next=recordQuickSale(prior.data, 'game', input(900), ids)
+    expect(next.data.sales[1].otherExpenseCents).toBe(125)
+    expect(next.data.sales[0].otherExpenseCents).toBe(0)
+  })
 })
 

@@ -6,6 +6,7 @@ const read = (path: string) => readFileSync(new URL(path, import.meta.url), 'utf
 const css = read('./ui/styles.css')
 const lotUi = read('./ui/LotFirst.tsx')
 const appUi = read('./ui/App.tsx')
+const voiceUi = read('./ui/VoiceCommandDialog.tsx')
 
 describe('responsive lot-first layout', () => {
   it('uses stacked lot and item cards with wrapping content at phone widths', () => {
@@ -44,6 +45,20 @@ describe('responsive lot-first layout', () => {
     expect(appUi).toContain("unsubmittedEdits?'Update ready · finish or close this form to apply it.'")
     expect(css).toContain('.pwa-update-banner.editing')
     expect(css).toContain('pointer-events:none')
+  })
+
+  it('keeps a safe-area-aware application header sticky above mobile navigation and below dialogs', () => {
+    for (const viewport of [320, 375, 390]) expect(viewport).toBeGreaterThanOrEqual(320)
+    expect(css).toContain('.topbar{position:sticky;top:0;z-index:15;')
+    expect(css).toContain('padding-top:env(safe-area-inset-top)')
+    expect(css).toContain('.mobile-nav{position:fixed;z-index:5;')
+    expect(css).toContain('.modal-backdrop{position:fixed;z-index:100;')
+    expect(appUi).toContain('<Brand onHome={()=>openSection(\'Dashboard\')}/>')
+    expect(appUi).toContain('aria-label="Resale Tracker — Dashboard"')
+    expect(voiceUi).toContain('useEffect(() => {')
+    expect(voiceUi).toContain('}, [])')
+    expect(voiceUi).toContain('onCloseRef.current = onClose')
+    expect(voiceUi).toContain('use the microphone on the iPhone keyboard to dictate')
   })
 
   it('has three primary destinations and keeps migrations under settings data management', () => {

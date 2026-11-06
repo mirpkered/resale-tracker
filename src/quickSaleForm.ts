@@ -13,5 +13,5 @@ export interface QuickSaleInitial {
 
 export function voiceSaleInitial(command: ParsedSaleCommand, item: InventoryItem): QuickSaleInitial {
   const values = commandSaleDefaults(command, item)
-  return { platform: values.platform, amountCents: values.amountCents, amountMode: command.amountMode, quantity: command.quantity, feeCents: values.feeCents, shippingCents: values.shippingCents, otherExpenseCents: values.otherExpenseCents }
+  return { platform: values.platform, amountCents: values.amountCents, amountMode: command.amountMode, quantity: command.quantity, ...(values.feeCents === null ? {} : {feeCents: values.feeCents}), ...(values.shippingCents === null ? {} : {shippingCents: values.shippingCents}), otherExpenseCents: values.otherExpenseCents }
 }
