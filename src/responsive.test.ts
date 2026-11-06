@@ -24,6 +24,28 @@ describe('responsive lot-first layout', () => {
     expect(css).not.toContain('.table-scroll table{min-width:760px}')
   })
 
+  it('centers sale dialogs within 320, 375, and 390 CSS-pixel viewports and makes long forms scrollable', () => {
+    for (const viewport of [320, 375, 390]) {
+      const available = viewport - 16 // 8px minimum gutter on each side, before safe-area padding
+      const width = Math.min(600, available)
+      expect(width).toBeLessThanOrEqual(available)
+      expect((viewport - width) / 2).toBeGreaterThanOrEqual(8)
+    }
+    expect(css).toContain('.modal{position:relative;inset:auto;transform:none;')
+    expect(css).toContain('overflow-y:auto;overflow-x:hidden;overscroll-behavior:contain;-webkit-overflow-scrolling:touch')
+    expect(css).toContain('grid-template-columns:minmax(0,1fr)')
+    expect(css).toContain('env(safe-area-inset-top)')
+    expect(css).toContain('env(safe-area-inset-bottom)')
+    expect(css).toContain('quick-sale-modal-form .form-actions')
+    expect(appUi).toContain('visual?.addEventListener(\'resize\',update)')
+  })
+
+  it('defers a PWA update during a form without putting an interactive banner over it', () => {
+    expect(appUi).toContain("unsubmittedEdits?'Update ready · finish or close this form to apply it.'")
+    expect(css).toContain('.pwa-update-banner.editing')
+    expect(css).toContain('pointer-events:none')
+  })
+
   it('has three primary destinations and keeps migrations under settings data management', () => {
     expect(appUi).toContain("type Section = typeof PRIMARY_NAVIGATION[number]")
     expect(appUi).toContain("settingsView==='data'")

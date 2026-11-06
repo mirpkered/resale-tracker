@@ -60,6 +60,12 @@ A `cash_sale` transaction may link item external IDs and their quantities. On fi
 
 Manual item editing covers descriptions, purchase lot, quantity, allocated cost, asking prices, platform, listing state, and notes. Sales and imported financial transactions can be edited in the app; changing gross, fees, shipping, expenses, or payment status recalculates confirmed cash and profit. Each local write adds a bounded audit entry. When authenticated in the Worker-hosted app, every approved edit automatically enters the revision-checked save queue; the Pages copy remains local until connected through a same-origin secure backend.
 
+## Voice commands
+
+The authenticated Worker app offers a **Command** action for typed commands and browser-provided speech recognition when `SpeechRecognition` or `webkitSpeechRecognition` is available. The app requests microphone access only after **Speak command** is tapped, does not retain raw audio, and never sends inventory records to a transcription service. Browser speech recognition may use the browser or operating-system provider's own speech service; its processing and availability depend on that platform. Unsupported browsers retain the typed-command workflow. No Resale Tracker transcription key, backend, or paid transcription service is required.
+
+Voice commands currently support inventory search, available-unit counts, purchase-lot cash/profit summaries, and sale proposals for available inventory. Every proposed sale must be reviewed and explicitly confirmed. Missing fees, shipping, or other expenses stay blank unless a confirmed Vinted default applies; an asking price is only an editable prefill. Sale corrections, returns, listing changes, and purchases remain manual workflows.
+
 Production starts with an empty local workspace when no private snapshot has been confirmed on this browser. Test fixtures are imported only by automated tests and are not included in the production application bundle.
 
 ## Validation

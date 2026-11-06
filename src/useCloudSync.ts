@@ -213,6 +213,16 @@ export function useCloudSync(workspace: LocalWorkspace, setWorkspace: (workspace
     try { await loadRemote('conflict') } catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not load the latest revision.') }
   }, [loadRemote])
 
+  const verifySession = useCallback(async () => {
+    if (!enabled) throw new Error('Private cloud sign-in is required before processing inventory commands.')
+    const current = await adapter.session()
+    if (!current) {
+      sessionRef.current = null; setSession(null); setStatus('reauthorize')
+      throw new Error('Your GitHub session expired. Sign in again; no sale was recorded.')
+    }
+    sessionRef.current = current; setSession(current)
+  }, [adapter])
+
   const reviewLocalBackup = useCallback(async (localData: TrackerData) => {
     if (!sessionRef.current) throw new Error('Sign in before importing a device backup.')
     const current = workspaceRef.current, loaded = await adapter.load()
@@ -221,5 +231,5 @@ export function useCloudSync(workspace: LocalWorkspace, setWorkspace: (workspace
     setChoices({}); setStatus('needs_merge'); setError('Review the imported device backup before syncing it.')
   }, [adapter])
 
-  return { enabled, configured, session, status, merge, recoveryRemote, recoverByLoadingCloud, choices, setChoice: (key: string, value: MergeChoice) => setChoices((current) => ({ ...current, [key]: value })), approveMerge, connect, signOut, reviewLatest, refresh: () => loadRemote('initial'), retry: checkConnection, reviewLocalBackup, error, revision, lastSavedAt }
+  return { enabled, configured, session, status, merge, recoveryRemote, recoverByLoadingCloud, choices, setChoice: (key: string, value: MergeChoice) => setChoices((current) => ({ ...current, [key]: value })), approveMerge, connect, signOut, reviewLatest, refresh: () => loadRemote('initial'), retry: checkConnection, reviewLocalBackup, verifySession, error, revision, lastSavedAt }
 }

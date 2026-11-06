@@ -8,6 +8,7 @@ describe('app-shell updates', () => {
     expect(canActivateAppUpdate(false, 'saving')).toBe(false)
     expect(canActivateAppUpdate(false, 'unsynced')).toBe(false)
     expect(canActivateAppUpdate(false, 'conflict')).toBe(false)
+    expect(canActivateAppUpdate(false, 'saved', true)).toBe(false) // open sale or voice form
   })
 
   it('allows a safe update after data is persisted or while signed out with no local edits', () => {

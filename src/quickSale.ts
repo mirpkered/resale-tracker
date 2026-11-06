@@ -8,6 +8,9 @@ export interface QuickSaleInput {
   feeCents: number
   shippingCents: number
   otherExpenseCents: number
+  quantity?: number
+  externalSource?: string
+  externalId?: string
 }
 
 export interface SaleCorrection {
@@ -24,10 +27,20 @@ export function quickSalePriceDefault(askingCents: number): string {
   return askingCents > 0 && Number.isSafeInteger(askingCents) ? (askingCents / 100).toFixed(2) : ''
 }
 
-export function recordQuickSale(data: TrackerData, itemId: string, input: QuickSaleInput, idFactory: () => string = () => crypto.randomUUID()): { data: TrackerData; sale: Sale; unit: InventoryUnit } {
+export function recordQuickSale(data: TrackerData, itemId: string, input: QuickSaleInput, idFactory: () => string = () => crypto.randomUUID()): { data: TrackerData; sale: Sale; unit: InventoryUnit; duplicate: boolean } {
+  if (input.externalSource && input.externalId) {
+    const existing = data.sales.find((sale) => sale.externalSource === input.externalSource && sale.externalId === input.externalId)
+    if (existing) {
+      const unitId = existing.lines?.[0]?.unitIds?.[0]
+      const unit = data.units?.find((entry) => entry.id === unitId) ?? { id: unitId ?? existing.id, itemId, copyNumber: 1, status: 'completed' as const }
+      return { data, sale: existing, unit, duplicate: true }
+    }
+  }
   const item = data.items.find((entry) => entry.id === itemId)
   if (!item) throw new Error('This inventory item could not be found.')
   if (!ACTIVE_STATUSES.includes(item.status) || item.quantity < 1) throw new Error('This item has no available inventory unit to sell.')
+  const quantity = input.quantity ?? 1
+  if (!Number.isSafeInteger(quantity) || quantity < 1 || quantity > item.quantity) throw new Error('Sale quantity exceeds the available inventory units.')
   if (!/^\d{4}-\d{2}-\d{2}$/.test(input.date) || !input.platform.trim()) throw new Error('Enter a valid sale date and platform.')
   for (const [label, cents] of Object.entries({ 'sale amount': input.grossCents, fees: input.feeCents, shipping: input.shippingCents, expenses: input.otherExpenseCents })) {
     if (!Number.isSafeInteger(cents) || cents < 0) throw new Error(`Enter a valid nonnegative ${label}.`)
@@ -38,29 +51,32 @@ export function recordQuickSale(data: TrackerData, itemId: string, input: QuickS
   const allUnits = [...(data.units ?? [])]
   const itemUnits = allUnits.filter((unit) => unit.itemId === itemId)
   const alreadySoldUnitIds = new Set(data.sales.flatMap((sale) => (sale.lines ?? []).flatMap((line) => (line.unitIds ?? []).slice(line.returnedQuantity ?? 0))))
-  let unit = itemUnits.find((entry) => ACTIVE_STATUSES.includes(entry.status) && !alreadySoldUnitIds.has(entry.id))
-  if (!unit) {
-    unit = { id: idFactory(), itemId, copyNumber: Math.max(0, ...itemUnits.map((entry) => entry.copyNumber)) + 1, status: item.status }
-    allUnits.push(unit)
+  const availableUnits = itemUnits.filter((entry) => ACTIVE_STATUSES.includes(entry.status) && !alreadySoldUnitIds.has(entry.id))
+  while (availableUnits.length < quantity) {
+    const created: InventoryUnit = { id: idFactory(), itemId, copyNumber: Math.max(0, ...itemUnits.map((entry) => entry.copyNumber), ...availableUnits.map((entry) => entry.copyNumber)) + 1, status: item.status }
+    allUnits.push(created); itemUnits.push(created); availableUnits.push(created)
   }
+  const selectedUnits = availableUnits.slice(0, quantity).map((unit) => ({ ...unit, status: 'completed' as const }))
+  const unit = selectedUnits[0]
   const remainingCost = remainingAcquisitionCost(data, item)
-  const allocatedCostCents = item.quantity === 1 ? remainingCost : Math.floor(remainingCost / item.quantity)
+  const allocatedCostCents = quantity === item.quantity ? remainingCost : Math.floor(remainingCost * quantity / item.quantity)
   const sale: Sale = {
     id: idFactory(), date: input.date, platform: input.platform.trim(), grossCents: input.grossCents,
     feeCents: input.feeCents, shippingCents: input.shippingCents, otherExpenseCents: input.otherExpenseCents,
     paymentStatus: 'paid', receivedCents: netCents, refundCents: 0, creditCents: 0,
-    itemIds: [itemId], lines: [{ itemId, quantity: 1, allocatedCostCents, proceedsCents: netCents, unitIds: [unit.id] }], status: 'completed',
+    itemIds: [itemId], lines: [{ itemId, quantity, allocatedCostCents, proceedsCents: netCents, unitIds: selectedUnits.map((entry) => entry.id) }], status: 'completed',
+    externalSource: input.externalSource, externalId: input.externalId,
     fieldVerification: { date: 'confirmed', platform: 'confirmed', grossCents: 'confirmed', feeCents: 'confirmed', shippingCents: 'confirmed', otherExpenseCents: 'confirmed', receivedCents: 'confirmed', paymentStatus: 'confirmed' },
   }
-  unit = { ...unit, status: 'completed' }
-  const remaining = item.quantity - 1
+  const remaining = item.quantity - quantity
   const updatedItem = { ...item, quantity: remaining, status: (remaining === 0 ? 'completed' : item.status) as typeof item.status }
   const platformExists = data.platforms.some((entry) => entry.name.toLowerCase() === sale.platform.toLowerCase())
   const platform = platformExists ? data.platforms : [...data.platforms, { id: sale.platform.toLowerCase().replaceAll(/[^a-z0-9]+/g, '-'), name: sale.platform, kind: 'sales' as const }]
   return {
-    data: { ...data, units: allUnits.map((entry) => entry.id === unit.id ? unit! : entry), items: data.items.map((entry) => entry.id === itemId ? updatedItem : entry), sales: [sale, ...data.sales], platforms: platform },
+    data: { ...data, units: allUnits.map((entry) => selectedUnits.find((selected) => selected.id === entry.id) ?? entry), items: data.items.map((entry) => entry.id === itemId ? updatedItem : entry), sales: [sale, ...data.sales], platforms: platform },
     sale,
     unit,
+    duplicate: false,
   }
 }
 
