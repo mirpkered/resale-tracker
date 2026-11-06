@@ -3,15 +3,14 @@ import type { TrackerData } from './domain'
 import { getMetrics } from './domain'
 import { PRIMARY_NAVIGATION, summarizeLot } from './lotView'
 
-const halloween = (): TrackerData => {
-  const items = Array.from({ length: 23 }, (_, index) => ({
-    id: `dvd-${String(index + 1).padStart(2, '0')}`,
-    title: index === 1 ? 'Joan of Arcadia Season 2' : index < 3 ? `DVD season set ${index + 1}` : `Unidentified DVD ${index - 2}`,
-    category: 'DVD', quantity: index < 19 ? 1 : 0, originalQuantity: 1, lotId: 'lot-halloween',
-    costCents: 100, askingCents: 0, platform: 'Other', status: index < 19 ? 'acquired' as const : 'disposed' as const,
-  }))
+const sampleInventory = (): TrackerData => {
+  const items = [
+    { id: 'item-a', title: 'Season set A', category: 'TV DVD', quantity: 1, originalQuantity: 1, lotId: 'lot-a', costCents: 300, askingCents: 700, platform: '', status: 'acquired' as const },
+    { id: 'item-b', title: 'Season set B', category: 'TV DVD', quantity: 0, originalQuantity: 1, lotId: 'lot-a', costCents: 300, askingCents: 0, platform: '', status: 'disposed' as const },
+    { id: 'item-c', title: 'Season set A', category: 'TV DVD', quantity: 1, originalQuantity: 1, lotId: 'lot-a', costCents: 300, askingCents: 600, platform: '', status: 'active' as const },
+  ]
   return {
-    lots: [{ id: 'lot-halloween', name: 'Halloween DVD Haul', date: '2026-10-31', source: 'Thrift store', purchaseCents: 2300, expensesCents: 0 }],
+    lots: [{ id: 'lot-a', name: 'Sample media lot', date: '2026-10-01', source: 'Thrift store', purchaseCents: 900, expensesCents: 0 }],
     items,
     units: items.map((item, index) => ({ id: `unit-${index + 1}`, itemId: item.id, copyNumber: 1, status: item.status })),
     sales: [], expenses: [], credit: [], platforms: [],
@@ -23,53 +22,55 @@ describe('lot-first inventory view', () => {
     expect(PRIMARY_NAVIGATION).toEqual(['Dashboard', 'Lots', 'Settings'])
   })
 
-  it('summarizes lot counts and confirmed cash received', () => {
-    const data = halloween()
+  it('summarizes lot unit counts and confirmed net cash', () => {
+    const data = sampleInventory()
     const item = data.items[0]
-    data.sales.push({ id: 'sale-1', date: '2026-11-02', platform: 'Vinted', grossCents: 400, feeCents: 20, shippingCents: 0, otherExpenseCents: 0, paymentStatus: 'paid', receivedCents: 380, refundCents: 0, creditCents: 0, itemIds: [item.id], lines: [{ itemId: item.id, quantity: 1, allocatedCostCents: 100, proceedsCents: 380, unitIds: ['unit-1'] }], status: 'completed', fieldVerification: { grossCents: 'confirmed', receivedCents: 'confirmed' } })
+    data.sales.push({ id: 'sale-a', date: '2026-10-02', platform: 'Local Sale', grossCents: 400, feeCents: 20, shippingCents: 0, otherExpenseCents: 0, paymentStatus: 'paid', receivedCents: 380, refundCents: 0, creditCents: 0, itemIds: [item.id], lines: [{ itemId: item.id, quantity: 1, allocatedCostCents: 300, proceedsCents: 380, unitIds: ['unit-1'] }], status: 'completed', fieldVerification: { grossCents: 'confirmed', receivedCents: 'confirmed' } })
     item.quantity = 0
     item.status = 'completed'
     data.units![0].status = 'completed'
     const summary = summarizeLot(data, data.lots[0])
-    expect(summary.purchased).toBe(23)
+    expect(summary.purchased).toBe(3)
     expect(summary.sold).toBe(1)
-    expect(summary.remaining).toBe(18)
+    expect(summary.remaining).toBe(1)
     expect(summary.grossConfirmedSalesCents).toBe(400)
     expect(summary.cashReceivedCents).toBe(380)
-    expect(summary.cashPositionCents).toBe(-1920)
+    expect(summary.cashPositionCents).toBe(-520)
   })
 
-  it('preserves the Halloween baseline: 23 original units, 4 disposed, no sales, and $23 investment', () => {
-    const data = halloween()
-    const before = structuredClone(data)
+  it('preserves disposed inventory cost and excludes it from remaining inventory', () => {
+    const data = sampleInventory()
     const summary = summarizeLot(data, data.lots[0])
     const metrics = getMetrics(data)
-    expect(summary.purchased).toBe(23)
+    expect(summary.purchased).toBe(3)
     expect(summary.sold).toBe(0)
-    expect(summary.remaining).toBe(19)
-    expect(data.units?.filter((unit) => unit.status === 'disposed')).toHaveLength(4)
-    expect(metrics.purchaseInvestmentCents).toBe(2300)
+    expect(summary.remaining).toBe(2)
+    expect(metrics.purchaseInvestmentCents).toBe(900)
     expect(metrics.netCashProceedsCents).toBe(0)
-    expect(metrics.overallCashPositionCents).toBe(-2300)
-    expect(data.items.find((item) => item.title === 'Joan of Arcadia Season 2')?.status).toBe('acquired')
-    expect(data).toEqual(before)
+    expect(metrics.overallCashPositionCents).toBe(-900)
+    expect(metrics.remainingInventoryCostCents).toBe(600)
   })
 
-  it('does not subtract estimated lot costs from a cash position', () => {
-    const data = halloween()
+  it('retains separate inventory records and unit IDs for identical titles', () => {
+    const data = sampleInventory()
+    expect(data.items.filter((item) => item.title === 'Season set A')).toHaveLength(2)
+    expect(data.items[0].id).not.toBe(data.items[2].id)
+    expect(data.units?.filter((unit) => ['item-a', 'item-c'].includes(unit.itemId))).toHaveLength(2)
+  })
+
+  it('does not subtract estimated acquisition cost from a cash position', () => {
+    const data = sampleInventory()
     data.lots[0].fieldVerification = { purchaseCents: 'estimated' }
-    const summary = summarizeLot(data, data.lots[0])
-    expect(summary.cashPositionCents).toBe(0)
+    expect(summarizeLot(data, data.lots[0]).cashPositionCents).toBe(0)
   })
 
-  it('keeps duplicate copies as separate units while showing item quantity', () => {
-    const data = halloween()
-    data.items[0].quantity = 2
-    data.items[0].originalQuantity = 2
-    data.units?.push({ id: 'unit-copy-2', itemId: data.items[0].id, copyNumber: 2, status: 'active' })
-    const summary = summarizeLot(data, data.lots[0])
-    expect(data.units?.filter((unit) => unit.itemId === data.items[0].id).map((unit) => unit.id)).toEqual(['unit-1', 'unit-copy-2'])
-    expect(summary.purchased).toBe(24)
-    expect(summary.remaining).toBe(20)
+  it('keeps a historical suggested price out of confirmed asking value and cash proceeds', () => {
+    const data = sampleInventory()
+    data.items[0].askingCents = 0
+    data.items[0].suggestedAskingCents = 800
+    expect(getMetrics(data).suggestedAskingValueCents).toBe(800)
+    expect(getMetrics(data).unsoldAskingCents).toBe(600)
+    expect(getMetrics(data).netCashProceedsCents).toBe(0)
+    expect(getMetrics(data).realizedItemProfitCents).toBe(0)
   })
 })

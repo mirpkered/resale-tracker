@@ -14,6 +14,7 @@ describe('responsive lot-first layout', () => {
     expect(css).toContain('@media(max-width:760px)')
     expect(lotUi).toContain('className="lot-card panel"')
     expect(lotUi).toContain('className="lot-item-card panel"')
+    expect(lotUi).toContain('Historical ask · unconfirmed')
   })
 
   it('keeps mobile controls inside the viewport and honors the iPhone safe area', () => {
