@@ -34,7 +34,7 @@ export function attachSpeechLifecycle(recognition: SpeechRecognizer, handlers: S
   recognition.onstart = () => { started = true; handlers.onStart?.() }
   recognition.onaudiostart = () => handlers.onAudioStart?.()
   recognition.onspeechstart = () => handlers.onSpeechStart?.()
-  recognition.onresult = (event) => { hasResult = Array.from(event.results).some((result) => result.isFinal); handlers.onResult(event) }
+  recognition.onresult = (event) => { hasResult = Array.from(event.results).some((result) => result.isFinal && result[0].transcript.trim().length > 0); handlers.onResult(event) }
   recognition.onnomatch = () => handlers.onNoMatch?.()
   recognition.onerror = (event) => handlers.onError?.(event.error)
   recognition.onend = () => handlers.onEnd({ cancelled, started, hasResult })

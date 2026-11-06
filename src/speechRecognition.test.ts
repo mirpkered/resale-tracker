@@ -35,6 +35,12 @@ describe('speech recognition lifecycle', () => {
     attachSpeechLifecycle(speech,{onResult:()=>{},onEnd:state=>ends.push(state)}).start()
     speech.end();expect(ends).toEqual([{cancelled:false,started:false,hasResult:false}])
   })
+  it('does not count an empty final result as a usable transcript', () => {
+    const speech=fakeRecognition(),ends:unknown[]=[]
+    const session=attachSpeechLifecycle(speech,{onResult:()=>{},onEnd:state=>ends.push(state)})
+    session.start();speech.onresult?.({resultIndex:0,results:[{isFinal:true,0:{transcript:'  '}}]});speech.end()
+    expect(ends).toEqual([{cancelled:false,started:false,hasResult:false}])
+  })
   it.each(['not-allowed','service-not-allowed','network','no-speech','audio-capture'])('passes actionable browser failure code %s',error=>{
     const speech=fakeRecognition(),errors:string[]=[]
     attachSpeechLifecycle(speech,{onResult:()=>{},onError:code=>errors.push(code),onEnd:()=>{}}).start()
