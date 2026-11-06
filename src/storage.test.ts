@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { sampleFixture } from './test-fixtures'
-import { discardLocalAndLoadRemote, exportLocalBackup, exportPendingBatch, isWorkspaceDirty, loadWorkspace, parseLocalBackup, receiveRemoteDocument, createEmptyWorkspace, withLocalData, WORKSPACE_KEY, blankData } from './storage'
+import { adoptRemoteDocument, discardLocalAndLoadRemote, exportLocalBackup, exportPendingBatch, isWorkspaceDirty, loadWorkspace, parseLocalBackup, preserveLocalRecoveryBackup, RECOVERY_BACKUP_KEY, receiveRemoteDocument, createEmptyWorkspace, withLocalData, WORKSPACE_KEY, blankData } from './storage'
 import { getMetrics } from './domain'
 import type { ItemStatus } from './domain'
 
@@ -28,6 +28,21 @@ describe('browser storage adapter', () => {
     const empty = createEmptyWorkspace()
     expect(isWorkspaceDirty(empty)).toBe(false)
     expect(empty.data).toEqual(blankData())
+  })
+  it('preserves old local records when their revision baseline is missing and creates a recoverable backup', () => {
+    const data = { ...blankData(), lots: [{ id: 'old-local-lot', name: 'Old local lot', date: '2026-11-04', source: 'Local store', purchaseCents: 1234, expensesCents: 0 }] }
+    memory.setItem(WORKSPACE_KEY, JSON.stringify({ data, baseRevision: 3 }))
+    const workspace = loadWorkspace()
+    expect(workspace.data.lots).toEqual(data.lots)
+    expect(workspace.recoveryRequired).toBe(true)
+    expect(isWorkspaceDirty(workspace)).toBe(true)
+    const backup = preserveLocalRecoveryBackup(workspace, 'test recovery')
+    expect(backup.workspace.data.lots).toEqual(data.lots)
+    expect(JSON.parse(memory.getItem(RECOVERY_BACKUP_KEY)!)[0].format).toBe('resale-tracker-recovery-backup')
+    const adopted = adoptRemoteDocument(snapshot(4, blankData()))
+    expect(adopted.baseRevision).toBe(4)
+    expect(isWorkspaceDirty(adopted)).toBe(false)
+    expect(JSON.parse(memory.getItem(RECOVERY_BACKUP_KEY)!)[0].workspace.data.lots).toEqual(data.lots)
   })
   it('round-trips a validated personal backup without importing it into the cloud automatically', () => {
     const personal = createEmptyWorkspace(), data = { ...personal.data, lots: [{ id: uuid, name: 'Private test lot', date: '2026-11-04', source: 'Test', purchaseCents: 100, expensesCents: 0 }] }, edited = withLocalData(personal, data)

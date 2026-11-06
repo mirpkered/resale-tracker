@@ -1,11 +1,13 @@
 import type { TrackerData } from './domain'
 
 export const WORKSPACE_KEY = 'resale-tracker-workspace-v2'
+export const RECOVERY_BACKUP_KEY = 'resale-tracker-recovery-backups-v1'
 const EXPLICIT_SIGN_OUT_KEY = 'resale-tracker-explicit-sign-out-v1'
 export interface SyncBatch { format: 'resale-tracker-sync-batch'; schemaVersion: '1.0'; batchId: string; baseRevision: number; createdAt: string; data: TrackerData }
 export interface RemoteDocument { schemaVersion: '2.0'; revision: number; updatedAt: string; importedBatches: Array<{ batchId: string }>; data: TrackerData }
-export interface LocalWorkspace { data: TrackerData; baseRevision: number; baseline: string; pendingBatch?: SyncBatch; remoteCandidate?: string; lastConfirmedAt?: string }
+export interface LocalWorkspace { data: TrackerData; baseRevision: number; baseline?: string; pendingBatch?: SyncBatch; remoteCandidate?: string; lastConfirmedAt?: string; recoveryRequired?: boolean }
 export interface LocalBackup { format: 'resale-tracker-local-backup'; schemaVersion: '1.0'; exportedAt: string; data: TrackerData }
+export interface LocalRecoveryBackup { format: 'resale-tracker-recovery-backup'; schemaVersion: '1.0'; savedAt: string; reason: string; workspace: LocalWorkspace }
 export const blankData = (): TrackerData => ({ lots: [], items: [], sales: [], expenses: [], credit: [], platforms: [] })
 const serialize = (data: TrackerData) => JSON.stringify(data)
 export function hasExplicitlySignedOut(): boolean { try { return localStorage.getItem(EXPLICIT_SIGN_OUT_KEY) === '1' } catch { return false } }
@@ -17,12 +19,16 @@ export function loadWorkspace(): LocalWorkspace {
     const saved = localStorage.getItem(WORKSPACE_KEY)
     if (saved) {
       const workspace = JSON.parse(saved) as LocalWorkspace & { mode?: string }
-      if ((workspace.mode === undefined || workspace.mode === 'personal') && workspace.data && Number.isSafeInteger(workspace.baseRevision) && typeof workspace.baseline === 'string') {
+      if (workspace.mode === 'demo') { const empty = createEmptyWorkspace(); return empty }
+      if ((workspace.mode === undefined || workspace.mode === 'personal') && workspace.data && Number.isSafeInteger(workspace.baseRevision)) {
         delete workspace.mode
+        // Keep old local records intact when an older client did not persist a
+        // baseline. An unknown baseline is not proof that local data is clean.
+        if (typeof workspace.baseline !== 'string') workspace.recoveryRequired = true
         return workspace
       }
     }
-  } catch { /* Invalid or legacy sample state is replaced with an empty private workspace. */ }
+  } catch { /* Unparseable state cannot be safely interpreted. */ }
   const workspace = createEmptyWorkspace()
   saveWorkspace(workspace)
   return workspace
@@ -49,7 +55,20 @@ export function withLocalData(workspace: LocalWorkspace, data: TrackerData): Loc
   saveWorkspace(next)
   return next
 }
-export function isWorkspaceDirty(workspace: LocalWorkspace) { return serialize(workspace.data) !== workspace.baseline }
+export function isWorkspaceDirty(workspace: LocalWorkspace) { return workspace.recoveryRequired === true || typeof workspace.baseline !== 'string' || serialize(workspace.data) !== workspace.baseline }
+export function preserveLocalRecoveryBackup(workspace: LocalWorkspace, reason: string, savedAt = new Date().toISOString()): LocalRecoveryBackup {
+  const backup: LocalRecoveryBackup = { format: 'resale-tracker-recovery-backup', schemaVersion: '1.0', savedAt, reason, workspace: JSON.parse(JSON.stringify(workspace)) as LocalWorkspace }
+  const prior = JSON.parse(localStorage.getItem(RECOVERY_BACKUP_KEY) ?? '[]') as LocalRecoveryBackup[]
+  const backups = [backup, ...prior.filter((entry) => entry.savedAt !== savedAt)].slice(0, 5)
+  localStorage.setItem(RECOVERY_BACKUP_KEY, JSON.stringify(backups))
+  return backup
+}
+export function adoptRemoteDocument(text: string): LocalWorkspace {
+  const remote = parseRemoteDocument(text), data = remote.data
+  const next: LocalWorkspace = { data, baseRevision: remote.revision, baseline: serialize(data), lastConfirmedAt: remote.updatedAt }
+  saveWorkspace(next)
+  return next
+}
 export function exportPendingBatch(workspace: LocalWorkspace) {
   const pendingBatch = workspace.pendingBatch && serialize(workspace.pendingBatch.data) === serialize(workspace.data) ? workspace.pendingBatch : { format: 'resale-tracker-sync-batch' as const, schemaVersion: '1.0' as const, batchId: crypto.randomUUID(), baseRevision: workspace.baseRevision, createdAt: new Date().toISOString(), data: workspace.data }
   const next = { ...workspace, pendingBatch }

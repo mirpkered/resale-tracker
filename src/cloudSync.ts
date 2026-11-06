@@ -4,7 +4,7 @@ import type { RemoteDocument, SyncBatch } from './storage'
 export type CloudSession = { authenticated: true; login: string; expiresAt: number }
 export type CloudSyncStatus = 'signed_out' | 'loading' | 'needs_merge' | 'saved' | 'saving' | 'offline' | 'unsynced' | 'failed' | 'conflict' | 'reauthorize'
 export type MergeChoice = 'local' | 'cloud'
-export type MergeConflict = { collection: keyof TrackerData; id: string; cloudId: string; title: string; reason: 'changed_record' | 'possible_duplicate' }
+export type MergeConflict = { collection: keyof TrackerData; id: string; cloudId: string; title: string; reason: 'changed_record' | 'possible_duplicate'; fields?: string[]; values?: Record<string, { local: unknown; cloud: unknown }>; localChanges?: Record<string, unknown> }
 export type MergePreview = { data: TrackerData; added: Array<{ collection: keyof TrackerData; id: string; title: string }>; existing: number; conflicts: MergeConflict[]; duplicateImports: number }
 
 export class CloudSyncError extends Error {
@@ -46,6 +46,133 @@ const serialize = (value: unknown) => JSON.stringify(value)
 const stableKey = (row: RecordWithId) => row.externalSource && row.externalId ? `${row.externalSource}:${row.externalId}` : row.externalId ? `external:${row.externalId}` : null
 const titleOf = (row: RecordWithId) => row.title ?? row.name ?? row.description ?? row.date ?? row.id
 const hasRecords = (data: TrackerData) => collections.some((collection) => records(data, collection).length > 0)
+
+export function hasTrackerRecords(data: TrackerData): boolean { return hasRecords(data) }
+
+/**
+ * A record-level three-way merge. A difference from the cloud is only a
+ * conflict when the same record field changed independently on both sides.
+ * Nested values (such as sale lines) are atomic fields so accounting bundles
+ * are never partially spliced together.
+ */
+export function threeWayMerge(baseline: TrackerData, local: TrackerData, cloud: TrackerData): MergePreview {
+  const data = { ...cloud } as TrackerData
+  const conflicts: MergeConflict[] = [], added: MergePreview['added'] = []
+  let existing = 0
+  const titleFor = (collection: keyof TrackerData, row: RecordWithId) => {
+    if (collection === 'units') return records(local, 'items').find((item) => item.id === row.itemId)?.title ?? records(cloud, 'items').find((item) => item.id === row.itemId)?.title ?? titleOf(row)
+    return titleOf(row)
+  }
+  for (const collection of collections) {
+    const baseRows = records(baseline, collection), localRows = records(local, collection), cloudRows = records(cloud, collection)
+    const baseById = new Map(baseRows.map((row) => [row.id, row])), localById = new Map(localRows.map((row) => [row.id, row])), cloudById = new Map(cloudRows.map((row) => [row.id, row]))
+    const ids = new Set([...baseById.keys(), ...localById.keys(), ...cloudById.keys()])
+    const merged: RecordWithId[] = []
+    for (const id of ids) {
+      const base = baseById.get(id), localRow = localById.get(id), cloudRow = cloudById.get(id)
+      if (!base) {
+        if (localRow && cloudRow) {
+          if (serialize(localRow) === serialize(cloudRow)) { merged.push(cloudRow); existing++; continue }
+          const { row, changed, conflicting } = mergeFields({}, localRow, cloudRow)
+          if (conflicting.length) conflicts.push({ collection, id, cloudId: id, title: titleFor(collection, localRow), reason: 'changed_record', fields: conflicting, values: conflictValues(conflicting, localRow, cloudRow), localChanges: changed })
+          merged.push(row as RecordWithId); if (!conflicting.length) added.push({ collection, id, title: titleFor(collection, row as RecordWithId) })
+        } else if (localRow) { merged.push(localRow); added.push({ collection, id, title: titleFor(collection, localRow) }) }
+        else if (cloudRow) merged.push(cloudRow)
+        continue
+      }
+      if (!localRow && !cloudRow) continue
+      if (!localRow || !cloudRow) {
+        const survivor = localRow ?? cloudRow!
+        const changedOnSurvivor = serialize(survivor) !== serialize(base)
+        if (!changedOnSurvivor) continue // The other side deleted an unchanged record.
+        const localDeleted = !localRow
+        const changes = localDeleted ? { __recordDeleted: true } : { __recordRestore: localRow as unknown as Record<string, unknown> }
+        conflicts.push({ collection, id, cloudId: id, title: titleFor(collection, survivor), reason: 'changed_record', fields: ['record deleted versus edited'], localChanges: changes })
+        if (cloudRow) merged.push(cloudRow)
+        continue
+      }
+      const { row, changed, conflicting } = mergeFields(base, localRow, cloudRow)
+      merged.push(row as RecordWithId)
+      if (conflicting.length) conflicts.push({ collection, id, cloudId: id, title: titleFor(collection, localRow), reason: 'changed_record', fields: conflicting, values: conflictValues(conflicting, localRow, cloudRow), localChanges: changed })
+      else if (serialize(row) !== serialize(cloudRow)) added.push({ collection, id, title: titleFor(collection, row as RecordWithId) })
+      else existing++
+    }
+    if (baseline[collection] !== undefined || local[collection] !== undefined || cloud[collection] !== undefined) (data as unknown as Record<string, unknown>)[collection] = merged
+  }
+  // Two devices can independently create different internal UUIDs for the
+  // same imported source record. Stable external IDs identify one logical
+  // record, so keep the cloud identity and remap local references to it.
+  for (const collection of collections) {
+    const rows = records(data, collection), groups = new Map<string, RecordWithId[]>()
+    for (const row of rows) { const key = stableKey(row); if (key) groups.set(key, [...(groups.get(key) ?? []), row]) }
+    for (const duplicates of groups.values()) {
+      if (duplicates.length < 2) continue
+      const canonical = duplicates.find((row) => records(cloud, collection).some((candidate) => candidate.id === row.id)) ?? duplicates[0]
+      for (const duplicate of duplicates) {
+        if (duplicate.id === canonical.id) continue
+        const alignedLocal = { ...duplicate, id: canonical.id } as RecordWithId
+        const { row, changed, conflicting } = mergeFields({}, alignedLocal, canonical)
+        const collectionRows = records(data, collection) as Array<Record<string, unknown>>
+        const canonicalIndex = collectionRows.findIndex((candidate) => candidate.id === canonical.id)
+        if (canonicalIndex >= 0) collectionRows[canonicalIndex] = row
+        const duplicateIndex = collectionRows.findIndex((candidate) => candidate.id === duplicate.id)
+        if (duplicateIndex >= 0) collectionRows.splice(duplicateIndex, 1)
+        remapDataReferences(data, collection, duplicate.id, canonical.id)
+        if (conflicting.length) conflicts.push({ collection, id: duplicate.id, cloudId: canonical.id, title: titleFor(collection, duplicate), reason: 'possible_duplicate', fields: conflicting, values: conflictValues(conflicting, alignedLocal, canonical), localChanges: changed })
+      }
+    }
+  }
+  return { data, added, existing, conflicts, duplicateImports: 0 }
+}
+
+function conflictValues(fields: string[], local: RecordWithId, cloud: RecordWithId): MergeConflict['values'] {
+  return Object.fromEntries(fields.map((field) => [field, { local: (local as unknown as Record<string, unknown>)[field], cloud: (cloud as unknown as Record<string, unknown>)[field] }]))
+}
+
+function mergeFields(base: Record<string, unknown>, local: Record<string, unknown>, cloud: Record<string, unknown>) {
+  const row: Record<string, unknown> = {}, localChanges: Record<string, unknown> = {}, conflicting: string[] = []
+  const keys = new Set([...Object.keys(base), ...Object.keys(local), ...Object.keys(cloud)])
+  for (const key of keys) {
+    const b = serialize(base[key]), l = serialize(local[key]), c = serialize(cloud[key])
+    const localChanged = l !== b, cloudChanged = c !== b
+    if (localChanged && cloudChanged && l !== c) { conflicting.push(key); row[key] = cloud[key]; localChanges[key] = local[key] }
+    else if (localChanged && (!cloudChanged || l === c)) { if (key in local) row[key] = local[key]; localChanges[key] = local[key] }
+    else if (key in cloud) row[key] = cloud[key]
+  }
+  return { row, changed: localChanges, conflicting }
+}
+
+export function applyThreeWayChoices(merged: TrackerData, conflicts: MergeConflict[], choices: Record<string, MergeChoice>): TrackerData {
+  const result = JSON.parse(JSON.stringify(merged)) as TrackerData
+  for (const conflict of conflicts) {
+    const key = `${conflict.collection}:${conflict.id}`, choice = choices[key]
+    if (!choice) throw new Error('Resolve every cloud merge conflict before approving the merge.')
+    if (choice === 'cloud' || !conflict.localChanges) continue
+    const rows = records(result, conflict.collection) as Array<Record<string, unknown>>
+    const index = rows.findIndex((row) => row.id === conflict.cloudId)
+    if (conflict.localChanges.__recordDeleted === true) { if (index >= 0) rows.splice(index, 1); continue }
+    const restore = conflict.localChanges.__recordRestore
+    if (restore && typeof restore === 'object') { if (index >= 0) rows[index] = restore as Record<string, unknown>; else rows.push(restore as Record<string, unknown>); continue }
+    if (index < 0) continue
+    for (const [field, value] of Object.entries(conflict.localChanges)) {
+      if (field === '__recordDeleted') continue
+      if (value === undefined) delete rows[index][field]
+      else rows[index][field] = value
+    }
+  }
+  return result
+}
+
+export function reconcileCloudSnapshots(baselineText: string | undefined, local: TrackerData, localRevision: number, cloud: RemoteDocument, recoveryRequired = false): { kind: 'adopt_cloud' | 'merge_local' | 'conflict' | 'recovery'; data?: TrackerData; preview?: MergePreview } {
+  if (recoveryRequired || !baselineText) return { kind: 'recovery' }
+  if (cloud.revision < localRevision) return { kind: 'recovery' }
+  let baseline: TrackerData
+  try { baseline = JSON.parse(baselineText) as TrackerData } catch { return { kind: 'recovery' } }
+  const result = threeWayMerge(baseline, local, cloud.data)
+  if (result.conflicts.length) return { kind: 'conflict', data: result.data, preview: result }
+  if (serialize(result.data) === serialize(cloud.data)) return { kind: 'adopt_cloud', data: cloud.data, preview: result }
+  return { kind: 'merge_local', data: result.data, preview: result }
+}
 
 export function requiresCloudMergeReview(local: TrackerData, cloud: TrackerData, remoteChanged = true, firstEmptyConnection = false): boolean {
   return hasRecords(local) && serialize(local) !== serialize(cloud) && (remoteChanged || firstEmptyConnection)
