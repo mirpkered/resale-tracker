@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { LoaderCircle, Mic, Search, Square, X } from 'lucide-react'
 import type { InventoryItem, TrackerData } from '../domain'
 import { ACTIVE_STATUSES, dollarsToCents, formatMoney } from '../domain'
@@ -21,6 +21,8 @@ export function VoiceCommandDialog({ data, authenticated, verifySession, onClose
   const [selectedItemId, setSelectedItemId] = useState('')
   const [error, setError] = useState('')
   const recognitionErrorRef = useRef('')
+  const startWatchdogRef = useRef<number | null>(null)
+  const listenWatchdogRef = useRef<number | null>(null)
   const [attempt, setAttempt] = useState(0)
   const [detailsOpen, setDetailsOpen] = useState(true)
   const recognitionRef = useRef<SpeechRecognizer | null>(null)
@@ -32,6 +34,7 @@ export function VoiceCommandDialog({ data, authenticated, verifySession, onClose
   onCloseRef.current = onClose
   const confirmingRef = useRef(false)
   const formRef = useRef<HTMLFormElement>(null)
+  const clearSpeechTimers = useCallback(() => { if(startWatchdogRef.current!==null)window.clearTimeout(startWatchdogRef.current);if(listenWatchdogRef.current!==null)window.clearTimeout(listenWatchdogRef.current);startWatchdogRef.current=null;listenWatchdogRef.current=null },[])
 
   const speechAvailable = browserSpeechRecognitionAvailable()
   const command = analysis?.kind === 'sale' ? analysis.command : null
@@ -54,8 +57,8 @@ export function VoiceCommandDialog({ data, authenticated, verifySession, onClose
     const previousOverflow = document.body.style.overflow
     document.body.style.overflow = 'hidden'
     window.addEventListener('keydown', onKey)
-    return () => { window.removeEventListener('keydown', onKey); lifecycleRef.current?.cancel(); lifecycleRef.current = null; recognitionRef.current = null; document.body.style.overflow = previousOverflow }
-  }, [])
+    return () => { window.removeEventListener('keydown', onKey); clearSpeechTimers(); lifecycleRef.current?.cancel(); lifecycleRef.current = null; recognitionRef.current = null; document.body.style.overflow = previousOverflow }
+  }, [clearSpeechTimers])
 
   const startListening = () => {
     setError(''); recognitionErrorRef.current=''; setAnalysis(null); setSelectedItemId(''); finalReceivedRef.current = false
@@ -70,6 +73,7 @@ export function VoiceCommandDialog({ data, authenticated, verifySession, onClose
       startedRef.current = false
       const lifecycle = attachSpeechLifecycle(recognition, {
       onResult: (event) => {
+        if(cancelledRef.current)return
         let finalTranscript = ''
         for (let index = event.resultIndex; index < event.results.length; index++) {
           if (event.results[index].isFinal) finalTranscript += event.results[index][0].transcript
@@ -95,14 +99,15 @@ export function VoiceCommandDialog({ data, authenticated, verifySession, onClose
         recognitionErrorRef.current = reason
         setError(reason)
       },
-      onStart: () => { startedRef.current = true; setPhase('listening') },
+      onStart: () => { if(cancelledRef.current)return;startedRef.current = true;if(startWatchdogRef.current!==null)window.clearTimeout(startWatchdogRef.current);startWatchdogRef.current=null;listenWatchdogRef.current=window.setTimeout(()=>{if(!recognitionRef.current)return;recognitionErrorRef.current='Speech listening timed out. Retry or use the iPhone keyboard microphone in the command box.';setError(recognitionErrorRef.current);setPhase('error');clearSpeechTimers();cancelledRef.current=true;lifecycleRef.current?.cancel();lifecycleRef.current=null;recognitionRef.current=null},45000);setPhase('listening') },
       onAudioStart: () => { if (!finalReceivedRef.current) setPhase('listening') },
       onSpeechStart: () => setPhase('listening'),
       onNoMatch: () => { if (!finalReceivedRef.current) { const reason='The browser heard audio but could not recognize words. Try speaking close to the phone or use keyboard dictation.';recognitionErrorRef.current=reason;setPhase('error'); setError(reason) } },
       onEnd: ({ cancelled, started, hasResult }) => {
+        clearSpeechTimers()
         recognitionRef.current = null
         lifecycleRef.current = null
-        if (cancelled || cancelledRef.current) { setPhase('ready'); return }
+        if (cancelled || cancelledRef.current) { if(recognitionErrorRef.current){setPhase('error');setError(recognitionErrorRef.current)}else setPhase('ready');return }
         if (hasResult || finalReceivedRef.current) { setPhase('ready'); return }
         setPhase('error')
         setError(recognitionErrorRef.current || (started || startedRef.current ? 'Listening ended without a transcript. iPhone standalone speech recognition may stop without returning words; use the microphone on the command box keyboard to dictate, or type the command.' : 'Speech recognition did not start. Check microphone permission and retry, or use keyboard dictation.'))
@@ -114,14 +119,15 @@ export function VoiceCommandDialog({ data, authenticated, verifySession, onClose
       // WebKit requires start() directly in the user's tap handler. Do not await
       // network/session work before consuming the gesture; session is verified
       // before interpretation and again before any confirmed sale.
+      startWatchdogRef.current=window.setTimeout(()=>{if(!recognitionRef.current)return;recognitionErrorRef.current='Speech recognition did not start. Check microphone permission and retry, or use iPhone keyboard dictation.';setError(recognitionErrorRef.current);setPhase('error');clearSpeechTimers();cancelledRef.current=true;lifecycleRef.current?.cancel();lifecycleRef.current=null;recognitionRef.current=null},10000)
       lifecycle.start()
     } catch (cause) {
-      lifecycleRef.current?.cancel(); lifecycleRef.current = null; recognitionRef.current = null; setPhase('error')
+      clearSpeechTimers();lifecycleRef.current?.cancel(); lifecycleRef.current = null; recognitionRef.current = null; setPhase('error')
       setError(cause instanceof Error ? `${cause.message} Check microphone permission, retry, or use iPhone keyboard dictation.` : 'Speech recognition could not start. Check microphone permission or use iPhone keyboard dictation.')
     }
   }
 
-  const cancelListening = () => { cancelledRef.current = true; lifecycleRef.current?.cancel(); lifecycleRef.current = null; recognitionRef.current = null; setError(''); setPhase('ready') }
+  const cancelListening = () => { cancelledRef.current = true; recognitionErrorRef.current='';clearSpeechTimers();lifecycleRef.current?.cancel(); lifecycleRef.current = null; recognitionRef.current = null; setError(''); setPhase('ready') }
   const interpret = async () => {
     if (!text.trim()) { setError('Enter or speak a command first.'); setPhase('error'); return }
     if (!canProcessVoiceCommand(authenticated)) { setError('Your private session expired. Sign in again; no sale was recorded.'); setPhase('error'); return }
@@ -168,7 +174,7 @@ export function VoiceCommandDialog({ data, authenticated, verifySession, onClose
 
   const lotName = resolvedItem ? data.lots.find((lot) => lot.id === resolvedItem.lotId)?.name ?? 'Standalone acquisition' : ''
   const previewValues = command && resolvedItem ? voiceSaleInitial(command, resolvedItem) : undefined
-  const closeDialog = () => { cancelledRef.current = true; lifecycleRef.current?.cancel(); lifecycleRef.current = null; recognitionRef.current = null; onCloseRef.current() }
+  const closeDialog = () => { cancelledRef.current = true; clearSpeechTimers();lifecycleRef.current?.cancel(); lifecycleRef.current = null; recognitionRef.current = null; onCloseRef.current() }
 
   return <div className="modal-backdrop voice-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) closeDialog() }} onFocusCapture={(event) => { const target = event.target; if (target instanceof HTMLElement && target.matches('input,select,textarea')) window.setTimeout(() => target.scrollIntoView({ block: 'nearest', behavior: 'smooth' }), 150) }}>
     <section className="modal voice-dialog" role="dialog" aria-modal="true" aria-labelledby="voice-dialog-title" aria-describedby="voice-dialog-help">
