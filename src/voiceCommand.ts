@@ -183,6 +183,12 @@ export function analyzeVoiceCommand(text: string, data: TrackerData, commandId: 
   return { kind: 'sale', command, matches, matched: ambiguous ? null : matches[0], ambiguous, query: command.itemQuery }
 }
 
+/** Shared authenticated path for typed commands and completed speech transcripts. */
+export async function interpretVoiceTranscript(text: string, data: TrackerData, authenticated: boolean, verify: () => Promise<void>, commandId: string): Promise<VoiceAnalysis> {
+  await verifyVoiceCommandSession(authenticated, verify)
+  return analyzeVoiceCommand(text, data, commandId)
+}
+
 export function commandSaleDefaults(command: ParsedSaleCommand, item: InventoryItem): { amountCents: number | null; platform: string; feeCents: number | null; shippingCents: number | null; otherExpenseCents: number | null } {
   const confirmedAsk = isFieldConfirmed(item, 'askingCents') && item.askingCents > 0 ? item.askingCents : null
   const platform = command.platform ?? (isFieldConfirmed(item, 'platform') && item.platform.trim() ? item.platform.trim() : '')

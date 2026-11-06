@@ -5,7 +5,7 @@ import { ACTIVE_STATUSES, dollarsToCents, formatMoney } from '../domain'
 import { QuickSaleFields } from './QuickSaleFields'
 import type { QuickSaleInitial } from '../quickSaleForm'
 import { voiceSaleInitial } from '../quickSaleForm'
-import { analyzeVoiceCommand, canProcessVoiceCommand, verifyVoiceCommandSession, type VoiceAnalysis } from '../voiceCommand'
+import { canProcessVoiceCommand, interpretVoiceTranscript, verifyVoiceCommandSession, type VoiceAnalysis } from '../voiceCommand'
 import type { QuickSaleInput } from '../quickSale'
 import { attachSpeechLifecycle, browserSpeechRecognitionAvailable, type SpeechRecognizer, type SpeechWindow } from '../speechRecognition'
 export function VoiceCommandDialog({ data, authenticated, verifySession, onClose, onConfirmSale }: {
@@ -33,6 +33,8 @@ export function VoiceCommandDialog({ data, authenticated, verifySession, onClose
   const onCloseRef = useRef(onClose)
   onCloseRef.current = onClose
   const confirmingRef = useRef(false)
+  const commandIdRef = useRef('')
+  const interpretationRef = useRef(0)
   const formRef = useRef<HTMLFormElement>(null)
   const clearSpeechTimers = useCallback(() => { if(startWatchdogRef.current!==null)window.clearTimeout(startWatchdogRef.current);if(listenWatchdogRef.current!==null)window.clearTimeout(listenWatchdogRef.current);startWatchdogRef.current=null;listenWatchdogRef.current=null },[])
 
@@ -60,8 +62,28 @@ export function VoiceCommandDialog({ data, authenticated, verifySession, onClose
     return () => { window.removeEventListener('keydown', onKey); clearSpeechTimers(); lifecycleRef.current?.cancel(); lifecycleRef.current = null; recognitionRef.current = null; document.body.style.overflow = previousOverflow }
   }, [clearSpeechTimers])
 
+  const interpretTranscript = async (value: string) => {
+    const commandText = value.trim()
+    if (!commandText) { setError('No transcript was received. Try Speak again, use the iPhone keyboard microphone, or type a command.'); setPhase('error'); return }
+    if (!canProcessVoiceCommand(authenticated)) { setError('Your private session expired. Sign in again; no sale was recorded.'); setPhase('error'); return }
+    const requestId = ++interpretationRef.current
+    const commandId = commandIdRef.current || (commandIdRef.current = `voice-${crypto.randomUUID()}`)
+    setPhase('processing'); setError('')
+    try {
+      const result = await interpretVoiceTranscript(commandText, data, authenticated, verifySession, commandId)
+      if (requestId !== interpretationRef.current) return
+      setAnalysis(result); setSelectedItemId(result.kind === 'sale' && result.matched ? result.matched.id : '')
+      setDetailsOpen(true)
+      setPhase('ready')
+      if (result.kind === 'unsupported' || result.kind === 'unmatched') setError(result.message)
+    } catch (cause) {
+      if (requestId !== interpretationRef.current) return
+      setPhase('error'); setError(cause instanceof Error ? cause.message : 'Could not verify your private session. No sale was recorded.')
+    }
+  }
+
   const startListening = () => {
-    setError(''); recognitionErrorRef.current=''; setAnalysis(null); setSelectedItemId(''); finalReceivedRef.current = false
+    setError(''); recognitionErrorRef.current=''; commandIdRef.current='';setAnalysis(null); setSelectedItemId(''); finalReceivedRef.current = false
     if (!canProcessVoiceCommand(authenticated)) { setPhase('error'); setError('Your private session is unavailable. Sign in again before using inventory commands.'); return }
     if (recognitionRef.current) return
     const SpeechRecognition = (window as SpeechWindow).SpeechRecognition ?? (window as SpeechWindow).webkitSpeechRecognition
@@ -80,8 +102,10 @@ export function VoiceCommandDialog({ data, authenticated, verifySession, onClose
         }
         if (finalTranscript && !finalReceivedRef.current) {
           finalReceivedRef.current = true
-          setText(finalTranscript.trim()); setAttempt((value) => value + 1); setAnalysis(null); setSelectedItemId('')
-          setPhase('processing')
+          const transcript=finalTranscript.trim()
+          commandIdRef.current=`voice-${crypto.randomUUID()}`
+          setText(transcript); setAttempt((value) => value + 1); setAnalysis(null); setSelectedItemId('')
+          void interpretTranscript(transcript)
         }
       },
       onError: (errorCode) => {
@@ -108,7 +132,9 @@ export function VoiceCommandDialog({ data, authenticated, verifySession, onClose
         recognitionRef.current = null
         lifecycleRef.current = null
         if (cancelled || cancelledRef.current) { if(recognitionErrorRef.current){setPhase('error');setError(recognitionErrorRef.current)}else setPhase('ready');return }
-        if (hasResult || finalReceivedRef.current) { setPhase('ready'); return }
+        // A final result is interpreted asynchronously. Leave the processing
+        // state alone until inventory matching and session verification finish.
+        if (hasResult || finalReceivedRef.current) return
         setPhase('error')
         setError(recognitionErrorRef.current || (started || startedRef.current ? 'Listening ended without a transcript. iPhone standalone speech recognition may stop without returning words; use the microphone on the command box keyboard to dictate, or type the command.' : 'Speech recognition did not start. Check microphone permission and retry, or use keyboard dictation.'))
       },
@@ -128,20 +154,6 @@ export function VoiceCommandDialog({ data, authenticated, verifySession, onClose
   }
 
   const cancelListening = () => { cancelledRef.current = true; recognitionErrorRef.current='';clearSpeechTimers();lifecycleRef.current?.cancel(); lifecycleRef.current = null; recognitionRef.current = null; setError(''); setPhase('ready') }
-  const interpret = async () => {
-    if (!text.trim()) { setError('Enter or speak a command first.'); setPhase('error'); return }
-    if (!canProcessVoiceCommand(authenticated)) { setError('Your private session expired. Sign in again; no sale was recorded.'); setPhase('error'); return }
-    setPhase('processing'); setError('')
-    try {
-      await verifyVoiceCommandSession(authenticated, verifySession)
-      const result = analyzeVoiceCommand(text, data, `voice-${crypto.randomUUID()}`)
-      setAnalysis(result); setSelectedItemId(result.kind === 'sale' && result.matched ? result.matched.id : '')
-      setDetailsOpen(true)
-      setPhase('ready')
-      if (result.kind === 'unsupported' || result.kind === 'unmatched') setError(result.message)
-    } catch (cause) { setPhase('error'); setError(cause instanceof Error ? cause.message : 'Could not verify your private session. No sale was recorded.') }
-  }
-
   const chooseItem = (item: InventoryItem) => {
     setSelectedItemId(item.id)
     setDetailsOpen(true)
@@ -184,8 +196,8 @@ export function VoiceCommandDialog({ data, authenticated, verifySession, onClose
         {speechAvailable ? <button className={`primary voice-mic ${phase === 'listening' ? 'listening' : ''}`} disabled={phase==='processing'} onClick={phase === 'listening' ? cancelListening : startListening}>{phase === 'listening' ? <><Square size={16}/> Stop listening</> : <><Mic size={17}/> Speak command</>}</button> : <span className="voice-unavailable">Speech recognition is not supported here. Use the iPhone keyboard microphone in the command box or type.</span>}
         {phase === 'listening'&&<span className="listening-indicator" role="status"><i/> Listening now</span>}
       </div>
-      <label className="voice-command-label">Command<textarea value={text} onChange={(event) => { setText(event.currentTarget.value); setAttempt((value) => value + 1); setAnalysis(null); setSelectedItemId(''); setError('') }} rows={2} placeholder="Sold VI Music for ten dollars on Vinted."/><small>On iPhone, tap the keyboard microphone to dictate directly into this box.</small></label>
-      <div className="voice-interpret-actions"><button className="secondary" disabled={phase === 'processing' || phase === 'listening' || !text.trim()} onClick={() => void interpret()}>{phase === 'processing' ? <><LoaderCircle size={16} className="spin"/> Checking inventory…</> : <><Search size={16}/> Interpret command</>}</button><span>{phase === 'error' ? 'Action needed' : phase === 'processing' ? 'Processing' : phase === 'listening' ? 'Listening' : 'Ready'}</span></div>
+      <label className="voice-command-label">Command<textarea value={text} onChange={(event) => { interpretationRef.current++;commandIdRef.current='';setText(event.currentTarget.value); setAttempt((value) => value + 1); setAnalysis(null); setSelectedItemId(''); setError('') }} rows={2} placeholder="Sold VI Music for ten dollars on Vinted."/><small>On iPhone, tap the keyboard microphone to dictate directly into this box.</small></label>
+      <div className="voice-interpret-actions"><button className="secondary" disabled={phase === 'processing' || phase === 'listening' || !text.trim()} onClick={() => void interpretTranscript(text)}>{phase === 'processing' ? <><LoaderCircle size={16} className="spin"/> Checking inventory…</> : <><Search size={16}/> Interpret command</>}</button><span>{phase === 'error' ? 'Action needed' : phase === 'processing' ? 'Checking inventory' : phase === 'listening' ? 'Listening' : analysis?'Review the proposal below':'Ready'}</span></div>
       {error&&<div className="voice-error" role="alert">{error}</div>}
       {analysis?.kind === 'read_only'&&<section className="voice-result"><h3>Inventory result</h3><p>{analysis.response}</p>{choices.length>0&&<VoiceItemChoices items={choices} data={data} selectedId={selectedItemId} onChoose={chooseItem}/>}</section>}
       {analysis?.kind === 'unsupported'&&<div className="voice-error" role="status">{analysis.message}</div>}

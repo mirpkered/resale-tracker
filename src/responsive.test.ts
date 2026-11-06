@@ -60,6 +60,8 @@ describe('responsive lot-first layout', () => {
     expect(voiceUi).not.toContain('}, [onClose])')
     expect(voiceUi).toContain('onCloseRef.current = onClose')
     expect(voiceUi).toContain('use the microphone on the iPhone keyboard to dictate')
+    expect(voiceUi).toContain('void interpretTranscript(transcript)')
+    expect(voiceUi).toContain('Confirm Sale')
   })
 
   it('has three primary destinations and keeps migrations under settings data management', () => {

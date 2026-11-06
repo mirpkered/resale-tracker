@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { InventoryItem, TrackerData } from './domain'
-import { commandSaleDefaults, analyzeVoiceCommand, canProcessVoiceCommand, verifyVoiceCommandSession } from './voiceCommand'
+import { commandSaleDefaults, analyzeVoiceCommand, canProcessVoiceCommand, interpretVoiceTranscript, verifyVoiceCommandSession } from './voiceCommand'
 import { recordQuickSale } from './quickSale'
 
 const item = (id: string, title: string, overrides: Partial<InventoryItem> = {}): InventoryItem => ({
@@ -85,6 +85,19 @@ describe('voice command interpretation', () => {
     expect(data.sales).toHaveLength(0)
     expect(data.items.find((entry) => entry.id === 'vi')?.quantity).toBe(1)
     expect(JSON.stringify(data)).toBe(before)
+  })
+
+  it('automatically interprets a completed transcript into a review-only proposal', async () => {
+    const data=fixture(),before=JSON.stringify(data),verify=async()=>{}
+    const result=await interpretVoiceTranscript('Sold VI Music for ten dollars on Vinted.',data,true,verify,'voice-auto-1')
+    expect(result).toMatchObject({kind:'sale',matched:{id:'vi'}})
+    expect(JSON.stringify(data)).toBe(before)
+    expect(data.sales).toHaveLength(0)
+  })
+
+  it('does not expose inventory to automatic interpretation when the session expires', async () => {
+    const verify=async()=>{throw new Error('GitHub authorization expired')}
+    await expect(interpretVoiceTranscript('Sold VI Music for ten dollars on Vinted.',fixture(),true,verify,'voice-expired')).rejects.toThrow(/expired/)
   })
 
   it('leaves missing platform and unrecognized sale amount for explicit editing', () => {
