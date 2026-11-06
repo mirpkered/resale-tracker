@@ -113,8 +113,37 @@ describe('voice command interpretation', () => {
   })
 
   it('parses only supported read-only inventory questions outside sale intent', () => {
-    expect(analyzeVoiceCommand('How many items do I still have available?', fixture(), 'read-1')).toMatchObject({ kind: 'read_only', response: expect.stringContaining('3 item units') })
+    expect(analyzeVoiceCommand('How many items do I still have available?', fixture(), 'read-1')).toMatchObject({ kind: 'read_only', response: expect.stringContaining('3 available item units') })
     expect(analyzeVoiceCommand('Undo the eBay sale for Joan', fixture(), 'unsafe')).toMatchObject({ kind: 'unsupported' })
+  })
+
+  it('answers listed, available, unlisted, sold, disposed and platform-specific unit counts', () => {
+    const data = fixture([
+      item('listed-a', 'Entourage Season 1', { status: 'active', platform: 'Vinted', quantity: 2, originalQuantity: 2 }),
+      item('listed-b', 'Entourage Season 3', { status: 'active', platform: 'Vinted' }),
+      item('unlisted', 'Joan of Arcadia Season 2', { status: 'acquired', platform: '' }),
+      item('sold', 'VI Music Video Collection', { status: 'completed', quantity: 0 }),
+      item('disposed', 'Incomplete DVD set', { status: 'disposed', quantity: 0 }),
+    ])
+    data.items.forEach((entry) => { entry.lotId = 'halloween' })
+    data.units = [
+      { id: 'a1', itemId: 'listed-a', copyNumber: 1, status: 'active' }, { id: 'a2', itemId: 'listed-a', copyNumber: 2, status: 'active' },
+      { id: 'b1', itemId: 'listed-b', copyNumber: 1, status: 'active' }, { id: 'u1', itemId: 'unlisted', copyNumber: 1, status: 'acquired' },
+      { id: 's1', itemId: 'sold', copyNumber: 1, status: 'completed' }, { id: 'd1', itemId: 'disposed', copyNumber: 1, status: 'disposed' },
+    ]
+    expect(analyzeVoiceCommand('How many items do I have listed?', data, 'c1')).toMatchObject({ kind: 'read_only', response: expect.stringMatching(/3 listed item units.*2 inventory records/) })
+    expect(analyzeVoiceCommand('How many items are available?', data, 'c2')).toMatchObject({ kind: 'read_only', response: expect.stringMatching(/4 available item units/) })
+    expect(analyzeVoiceCommand('How many items are unlisted?', data, 'c3')).toMatchObject({ kind: 'read_only', response: expect.stringMatching(/1 unlisted item unit/) })
+    expect(analyzeVoiceCommand('How many items have sold?', data, 'c4')).toMatchObject({ kind: 'read_only', response: expect.stringMatching(/1 sold item unit/) })
+    expect(analyzeVoiceCommand('How many items have been disposed?', data, 'c5')).toMatchObject({ kind: 'read_only', response: expect.stringMatching(/1 disposed item unit/) })
+    expect(analyzeVoiceCommand('How many items do I have listed on Vinted?', data, 'c6')).toMatchObject({ kind: 'read_only', response: expect.stringMatching(/3 listed item units on Vinted/) })
+    expect(analyzeVoiceCommand('How many Halloween DVDs are still available?', data, 'c7')).toMatchObject({ kind: 'read_only', response: expect.stringMatching(/4 available item units.*Halloween DVD Haul/) })
+  })
+
+  it('does not turn a count question into an empty-title inventory search', () => {
+    const result = analyzeVoiceCommand('How many items do I have listed?', fixture(), 'count')
+    expect(result.kind).toBe('read_only')
+    expect(result).not.toMatchObject({ kind: 'read_only', response: expect.stringContaining('No inventory match for “”.') })
   })
 
   it('requires authentication before inventory commands can be processed', () => {

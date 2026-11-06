@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
-import type { TrackerData } from './domain'
+import type { InventoryItem, TrackerData } from './domain'
 import { getMetrics } from './domain'
-import { PRIMARY_NAVIGATION, summarizeLot } from './lotView'
+import { PRIMARY_NAVIGATION, sortLotInventoryItems, summarizeLot } from './lotView'
 
 const sampleInventory = (): TrackerData => {
   const items = [
@@ -56,6 +56,35 @@ describe('lot-first inventory view', () => {
     expect(data.items.filter((item) => item.title === 'Season set A')).toHaveLength(2)
     expect(data.items[0].id).not.toBe(data.items[2].id)
     expect(data.units?.filter((unit) => ['item-a', 'item-c'].includes(unit.itemId))).toHaveLength(2)
+  })
+
+  it('sorts listed, other available, sold, then disposed with stable order and no source mutation', () => {
+    const data = sampleInventory()
+    const source = [
+      { ...data.items[1], status: 'disposed' as const },
+      { ...data.items[0], id: 'unlisted', status: 'acquired' as const },
+      { ...data.items[2], id: 'listed-a', status: 'active' as const, platform: 'Vinted' },
+      { ...data.items[0], id: 'sold', status: 'completed' as const, quantity: 0 },
+      { ...data.items[2], id: 'listed-b', status: 'active' as const, platform: 'eBay' },
+      { ...data.items[0], id: 'listed-partial', status: 'active' as const, platform: 'Vinted', quantity: 1, originalQuantity: 2 },
+    ]
+    const result = sortLotInventoryItems(source)
+    expect(result.map((item) => item.id)).toEqual(['listed-a', 'listed-b', 'listed-partial', 'unlisted', 'sold', 'item-b'])
+    expect(source.map((item) => item.id)).toEqual(['item-b', 'unlisted', 'listed-a', 'sold', 'listed-b', 'listed-partial'])
+  })
+
+  it('reorders immediately when an available item becomes sold or disposed', () => {
+    const items: InventoryItem[] = [
+      { ...sampleInventory().items[0], id: 'first', status: 'acquired' as const },
+      { ...sampleInventory().items[0], id: 'second', status: 'active' as const, platform: 'Vinted' },
+    ]
+    expect(sortLotInventoryItems(items).map((item) => item.id)).toEqual(['second', 'first'])
+    items[0].status = 'completed'
+    expect(sortLotInventoryItems(items).map((item) => item.id)).toEqual(['second', 'first'])
+    items[0].status = 'disposed'
+    expect(sortLotInventoryItems(items).map((item) => item.id)).toEqual(['second', 'first'])
+    items[1].status = 'disposed'
+    expect(sortLotInventoryItems(items).map((item) => item.id)).toEqual(['first', 'second'])
   })
 
   it('does not subtract estimated acquisition cost from a cash position', () => {

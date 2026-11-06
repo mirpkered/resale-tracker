@@ -2,6 +2,19 @@ import { ACTIVE_STATUSES, allocateCents, isFieldConfirmed, lineNetProceedsCents,
 
 export const PRIMARY_NAVIGATION = ['Dashboard', 'Lots', 'Settings'] as const
 
+const SOLD_STATUSES = new Set(['awaiting_payment', 'awaiting_fulfillment', 'completed'])
+const END_STATUSES = new Set(['retained', 'traded', 'donated'])
+
+/** Presentation-only stable ordering for a lot's inventory. Never mutates TrackerData.items. */
+export function sortLotInventoryItems(items: InventoryItem[]): InventoryItem[] {
+  return items.map((item, index) => ({ item, index, group: item.status === 'disposed' ? 4
+    : SOLD_STATUSES.has(item.status) ? 2
+      : END_STATUSES.has(item.status) ? 3
+        : ACTIVE_STATUSES.includes(item.status) && item.quantity > 0 && item.status === 'active' && item.platform.trim() ? 0
+          : ACTIVE_STATUSES.includes(item.status) && item.quantity > 0 ? 1 : 3
+  })).sort((a, b) => a.group - b.group || a.index - b.index).map(({ item }) => item)
+}
+
 export interface LotSummary {
   lot: PurchaseLot
   purchased: number

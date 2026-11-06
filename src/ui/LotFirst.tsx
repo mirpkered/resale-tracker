@@ -1,6 +1,6 @@
 import { ArrowLeft, ChevronRight, CircleDollarSign, Moon, Package, Pencil, Plus, ShoppingBag, Sun, WalletCards } from 'lucide-react'
 import { ACTIVE_STATUSES, formatMoney, getMetrics, STATUS_LABELS, type InventoryItem, type PurchaseLot, type TrackerData } from '../domain'
-import { itemSales, summarizeLot } from '../lotView'
+import { itemSales, sortLotInventoryItems, summarizeLot } from '../lotView'
 
 export function LotsOverview({ data, onOpenLot, onEditLot }: { data: TrackerData; onOpenLot: (id: string) => void; onEditLot: (lot: PurchaseLot) => void }) {
   if (!data.lots.length && !data.items.some((item) => !item.lotId)) return <div className="lot-empty panel"><div className="lot-empty-icon"><ShoppingBag size={25}/></div><h2>No purchase lots yet</h2><p>Lots imported from your Resale Tracker conversations will appear here.</p></div>
@@ -20,7 +20,7 @@ export function LotsOverview({ data, onOpenLot, onEditLot }: { data: TrackerData
 
 export function LotInventory({ data, lot, onBack, onOpenItem, onAddItem, onEditLot }: { data: TrackerData; lot: PurchaseLot | null; onBack: () => void; onOpenItem: (item: InventoryItem) => void; onAddItem: () => void; onEditLot: () => void }) {
   const summary = lot ? summarizeLot(data, lot) : null
-  const items = data.items.filter((item) => lot ? item.lotId === lot.id : !item.lotId)
+  const items = sortLotInventoryItems(data.items.filter((item) => lot ? item.lotId === lot.id : !item.lotId))
   const standalonePurchased = items.reduce((sum, item) => sum + (data.units?.filter((unit) => unit.itemId === item.id).length || item.originalQuantity || item.quantity), 0)
   const standaloneRemaining = items.filter((item) => ACTIVE_STATUSES.includes(item.status)).reduce((sum, item) => sum + item.quantity, 0)
   return <section className="lot-detail-view">
@@ -35,7 +35,7 @@ export function LotInventory({ data, lot, onBack, onOpenItem, onAddItem, onEditL
       const active = ACTIVE_STATUSES.includes(item.status) && item.quantity > 0
       return <button key={item.id} className="lot-item-card panel" onClick={() => onOpenItem(item)}>
         <span className="lot-item-image">{item.image ? <img src={item.image} alt=""/> : <Package size={20}/>}</span>
-        <span className="lot-item-content"><b>{item.title}</b><span>{item.platform || 'No platform'}{item.quantity > 1 ? ` · ${item.quantity} copies available` : ''}</span><span className="item-card-badges"><em className={`item-status status-${item.status}`}>{STATUS_LABELS[item.status]}</em>{sales.length > 0 && <em className="actual-price">Sale price {formatMoney(actual)}</em>}</span></span>
+        <span className="lot-item-content"><b>{item.title}</b><span>{item.status === 'active' && item.platform.trim() ? `Listed on ${item.platform}` : item.platform || 'No platform'}{item.quantity > 1 ? ` · ${item.quantity} copies available` : ''}</span><span className="item-card-badges"><em className={`item-status status-${item.status}`}>{STATUS_LABELS[item.status]}</em>{sales.length > 0 && <em className="actual-price">Sale price {formatMoney(actual)}</em>}</span></span>
         <span className="lot-item-asking">{item.askingCents > 0 ? <><small>{item.status === 'active' ? 'Current asking' : 'Original asking'}</small><b>{formatMoney(item.askingCents)}</b></> : item.suggestedAskingCents ? <><small>Historical ask · unconfirmed</small><b>{formatMoney(item.suggestedAskingCents)}</b></> : <small>No asking price</small>}<ChevronRight size={17}/></span>
         {!active && sales.length === 0 && <span className="lot-item-terminal">{STATUS_LABELS[item.status]}</span>}
       </button>
@@ -56,7 +56,7 @@ export function ItemDetails({ data, item, onBack, onEdit, onMarkSold }: { data: 
       <div className="item-detail-title"><h2>{item.title}</h2><button className="secondary" onClick={onEdit}><Pencil size={16}/> Edit</button></div>
       <p className="item-description">{item.description || 'No description recorded.'}</p>
       <div className="item-detail-status"><span className={`item-status status-${item.status}`}>{STATUS_LABELS[item.status]}</span><span>{item.quantity} available · {soldQuantity} sold</span></div>
-      <div className="item-detail-financials"><div><span>Category</span><b>{item.category}</b></div><div><span>Allocated cost</span><b>{formatMoney(item.costCents)}</b></div><div><span>Current asking price</span><b>{item.askingCents ? formatMoney(item.askingCents) : 'Not set'}</b></div>{Boolean(item.suggestedAskingCents)&&<div><span>Historical ask · unconfirmed</span><b>{formatMoney(item.suggestedAskingCents??0)}</b></div>}<div><span>Listing platform</span><b>{item.platform || 'Not listed'}</b></div><div><span>Actual sale price</span><b>{sales.length ? formatMoney(sales.reduce((sum, entry) => sum + entry.grossCents, 0)) : 'No sale recorded'}</b></div></div>
+      <div className="item-detail-financials"><div><span>Category</span><b>{item.category}</b></div><div><span>Allocated cost</span><b>{formatMoney(item.costCents)}</b></div><div><span>Current asking price</span><b>{item.askingCents ? formatMoney(item.askingCents) : 'Not set'}</b></div>{Boolean(item.suggestedAskingCents)&&<div><span>Historical ask · unconfirmed</span><b>{formatMoney(item.suggestedAskingCents??0)}</b></div>}<div><span>Listing platform</span><b>{item.status === 'active' && item.platform.trim() ? `Listed on ${item.platform}` : item.platform || 'Not listed'}</b></div><div><span>Actual sale price</span><b>{sales.length ? formatMoney(sales.reduce((sum, entry) => sum + entry.grossCents, 0)) : 'No sale recorded'}</b></div></div>
       {item.url && <a className="item-listing-link" href={item.url} target="_blank" rel="noreferrer">Open listing</a>}
       {item.notes && <div className="item-notes"><b>Notes</b><p>{item.notes}</p></div>}
       {sales.length > 0 && <section className="item-sale-history"><h3>Sale history</h3>{sales.map(({ sale, grossCents, quantity }) => <div className="item-sale-row" key={sale.id}><div><b>{formatMoney(grossCents)} · {sale.platform}</b><span>{sale.date} · {quantity} unit{quantity === 1 ? '' : 's'} · {sale.paymentStatus === 'paid' ? 'Cash received' : sale.paymentStatus === 'unpaid' ? 'Awaiting payment' : sale.paymentStatus}</span></div><span>{sale.feeCents + sale.shippingCents + sale.otherExpenseCents > 0 ? `${formatMoney(sale.feeCents + sale.shippingCents + sale.otherExpenseCents)} expenses` : 'No selling expenses'}</span></div>)}</section>}

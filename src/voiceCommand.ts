@@ -140,11 +140,70 @@ function parseSale(text: string, platforms: TrackerData['platforms'], commandId:
 
 function activeItems(data: TrackerData) { return data.items.filter((item) => ACTIVE_STATUSES.includes(item.status) && item.quantity > 0 && !item.archived) }
 
+const AVAILABLE_COUNT_STATUSES = new Set(['acquired', 'draft', 'active', 'reserved', 'returned'])
+const SOLD_COUNT_STATUSES = new Set(['awaiting_payment', 'awaiting_fulfillment', 'completed'])
+
+function countQuestion(text: string, data: TrackerData): VoiceAnalysis | null {
+  if (!/\bhow many\b/i.test(text) || !/\b(?:items?|copies|units?|titles?|dvds?|available|listed|unlisted|sold|sales|disposed|completed)\b/i.test(text)) return null
+  const listed = /\b(?:listed|active listings?)\b/i.test(text)
+  const unlisted = /\bunlisted\b/i.test(text)
+  const sold = /\b(?:sold|sales|completed)\b/i.test(text)
+  const disposed = /\bdisposed\b/i.test(text)
+  const available = !listed && !unlisted && !sold && !disposed
+  const normalizedQuestion = normalize(text)
+  const platform = data.platforms.concat(PLATFORMS).find((entry) => normalizedQuestion.includes(normalize(entry.name)))?.name
+  const scope = text.toLowerCase()
+    .replace(/\bhow many\b|\bdo i have\b|\bi have\b|\bare there\b|\bare\b|\bitems?\b|\bcopies\b|\bunits?\b|\btitles?\b|\bdvds?\b|\bavailable\b|\blisted\b|\bactive listings?\b|\bunlisted\b|\bsold\b|\bsales\b|\bdisposed\b|\bcompleted\b|\bstill\b|\bleft\b|\bremaining\b|\bthe\b|\bmy\b|\bi\b|\bwe\b|\bon\b|\bin\b|\bdo\b|\bhave\b|\bhas\b|\bbeen\b|\bdid\b|\bcurrently\b|\bhow\b|\bmany\b/gi, ' ')
+    .replace(/[?.!,]/g, ' ').replace(/\s+/g, ' ').trim()
+  let scopedItems = data.items.filter((item) => !item.archived)
+  let scopedLotName = ''
+  if (scope) {
+    const platformTokens = new Set(normalize(platform ?? '').split(' ').filter(Boolean))
+    const scopeTokens = normalize(scope).split(' ').filter((token) => token && !platformTokens.has(token))
+    const lots = data.lots.map((lot) => {
+      const nameTokens = new Set(normalize(lot.name).split(' '))
+      const overlap = scopeTokens.filter((token) => nameTokens.has(token) || (token.endsWith('s') && nameTokens.has(token.slice(0, -1)))).length
+      return { lot, score: scopeTokens.length ? overlap / scopeTokens.length : 0 }
+    }).filter((entry) => entry.score >= 0.5).sort((a, b) => b.score - a.score)
+    if (lots.length) {
+      scopedItems = scopedItems.filter((item) => item.lotId === lots[0].lot.id)
+      scopedLotName = lots[0].lot.name
+    } else if (scopeTokens.length) {
+      scopedItems = scopedItems.filter((item) => scopeTokens.every((token) => normalize(`${item.title} ${item.category} ${item.description ?? ''}`).split(' ').includes(token)))
+    }
+  }
+  if (platform) scopedItems = scopedItems.filter((item) => item.platform.toLocaleLowerCase() === platform.toLocaleLowerCase())
+  const matches = scopedItems.filter((item) => {
+    if (listed) return item.status === 'active' && item.quantity > 0 && Boolean(item.platform.trim())
+    if (unlisted) return AVAILABLE_COUNT_STATUSES.has(item.status) && item.status !== 'active' && item.quantity > 0
+    if (disposed) return item.status === 'disposed' || (data.units ?? []).some((unit) => unit.itemId === item.id && unit.status === 'disposed')
+    if (sold) return SOLD_COUNT_STATUSES.has(item.status) || (data.units ?? []).some((unit) => unit.itemId === item.id && SOLD_COUNT_STATUSES.has(unit.status)) || data.sales.some((sale) => (sale.lines ?? []).some((line) => line.itemId === item.id && line.quantity > (line.returnedQuantity ?? 0)))
+    return AVAILABLE_COUNT_STATUSES.has(item.status) && item.quantity > 0
+  })
+  const unitsFor = (item: InventoryItem): number => {
+    if (listed || unlisted || available) return item.quantity
+    const trackedUnits = (data.units ?? []).filter((unit) => unit.itemId === item.id)
+    if (disposed) return trackedUnits.length ? trackedUnits.filter((unit) => unit.status === 'disposed').length : item.status === 'disposed' ? item.originalQuantity ?? item.quantity : 0
+    if (sold) {
+      const unitSold = trackedUnits.filter((unit) => SOLD_COUNT_STATUSES.has(unit.status)).length
+      const saleSold = data.sales.flatMap((sale) => sale.lines ?? []).filter((line) => line.itemId === item.id).reduce((sum, line) => sum + Math.max(0, line.quantity - (line.returnedQuantity ?? 0)), 0)
+      return Math.max(unitSold, saleSold, SOLD_COUNT_STATUSES.has(item.status) ? item.originalQuantity ?? item.quantity : 0)
+    }
+    return item.quantity
+  }
+  const unitCount = matches.reduce((sum, item) => sum + unitsFor(item), 0)
+  const recordCount = matches.length
+  const distinctTitles = new Set(matches.map((item) => normalize(item.title).replace(/\b(?:complete|incomplete) copy(?: [a-z0-9]+)?$/i, '').replace(/\bcopy [a-z0-9]+$/i, '').trim())).size
+  const type = listed ? 'listed' : unlisted ? 'unlisted' : sold ? 'sold' : disposed ? 'disposed' : 'available'
+  const suffix = platform ? ` on ${platform}` : ''
+  const scopeSuffix = scopedLotName ? ` in ${scopedLotName}` : ''
+  return { kind: 'read_only', response: `${unitCount} ${type} item unit${unitCount === 1 ? '' : 's'}${suffix}${scopeSuffix}, across ${recordCount} inventory record${recordCount === 1 ? '' : 's'} (${distinctTitles} distinct title${distinctTitles === 1 ? '' : 's'}).`, matches }
+}
+
 function readOnlyQuery(text: string, data: TrackerData): VoiceAnalysis | null {
   const metrics = getMetrics(data)
-  if (/\bhow many\b.*\b(?:items?|copies|units?)\b.*\b(?:available|left|remaining)\b/i.test(text) || /\bhow many\b.*\bstill have\b/i.test(text)) {
-    return { kind: 'read_only', response: `You have ${metrics.remainingQuantity} item units available.`, matches: [] }
-  }
+  const count = countQuestion(text, data)
+  if (count) return count
   if (/\b(?:how much|what).*(?:recovered|cash|profit|investment)\b/i.test(text)) {
     const lotQuery = text.replace(/^.*?\b(?:from|on|for)\s+/i, '').replace(/\b(?:haul|lot|purchase|profit|cash|recovered|have i|how much|money|the)\b/gi, ' ').replace(/[?.!,]/g, ' ').replace(/\s+/g, ' ').trim()
     const lots = data.lots.map((lot) => ({ lot, score: matchScore(lotQuery, { id: lot.id, title: lot.name } as InventoryItem) })).filter((entry) => entry.score >= 0.55).sort((a, b) => b.score - a.score)
