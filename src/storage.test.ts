@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { sampleFixture } from './test-fixtures'
-import { adoptRemoteDocument, discardLocalAndLoadRemote, exportLocalBackup, exportPendingBatch, isWorkspaceDirty, loadWorkspace, parseLocalBackup, preserveLocalRecoveryBackup, RECOVERY_BACKUP_KEY, receiveRemoteDocument, createEmptyWorkspace, withLocalData, WORKSPACE_KEY, blankData } from './storage'
+import { adoptRemoteDocument, discardLocalAndLoadRemote, exportLocalBackup, exportPendingBatch, isWorkspaceDirty, loadWorkspace, parseLocalBackup, parseRemoteDocument, preserveLocalRecoveryBackup, RECOVERY_BACKUP_KEY, receiveRemoteDocument, createEmptyWorkspace, withLocalData, WORKSPACE_KEY, blankData } from './storage'
 import { getMetrics } from './domain'
 import type { ItemStatus } from './domain'
 
@@ -80,5 +80,13 @@ describe('browser storage adapter', () => {
     expect(getMetrics(restored.workspace.data).purchaseInvestmentCents).toBe(2300)
     expect(getMetrics(restored.workspace.data).netCashProceedsCents).toBe(0)
     expect(getMetrics(restored.workspace.data).overallCashPositionCents).toBe(-2300)
+  })
+  it('accepts explicitly rounded item costs while preserving the lot cash investment', () => {
+    const lot = { id:'rounding-lot', name:'Rounding test', date:'2026-11-07', source:'Test source', purchaseCents:100, expensesCents:0, allocationRoundingAdjustmentCents:2 }
+    const items = Array.from({length:3},(_,index)=>({id:`rounded-item-${index}`,title:`Test item ${index}`,category:'Other',quantity:1,lotId:lot.id,costCents:34,askingCents:500,minimumOfferCents:300,platform:'Test platform',status:'draft' as const}))
+    const data = {...blankData(),lots:[lot],items}
+    expect(parseRemoteDocument(snapshot(1,data)).data).toEqual(data)
+    expect(getMetrics(data).purchaseInvestmentCents).toBe(100)
+    expect(() => parseRemoteDocument(snapshot(1,{...data,lots:[{...lot,allocationRoundingAdjustmentCents:1}]}))).toThrow(/Remote item costs exceed lot/)
   })
 })
