@@ -62,9 +62,9 @@ export function validateData(data) {
   }
   if (data.auditEvents !== undefined) { uniqueIds(data.auditEvents, 'local audit event'); for (const event of data.auditEvents) assert(typeof event.at === 'string' && typeof event.action === 'string' && typeof event.summary === 'string', `Local audit event ${event.id} is invalid.`) }
   const allocations = new Map()
-  for (const lot of data.lots) { cents(lot.purchaseCents, 'Lot purchase cost'); cents(lot.expensesCents, 'Lot expenses') }
+  for (const lot of data.lots) { cents(lot.purchaseCents, 'Lot purchase cost'); cents(lot.expensesCents, 'Lot expenses'); cents(lot.allocationRoundingAdjustmentCents ?? 0, 'Lot allocation rounding adjustment') }
   for (const item of data.items) {
-    cents(item.costCents, 'Item acquisition cost'); cents(item.askingCents, 'Item asking price')
+    cents(item.costCents, 'Item acquisition cost'); cents(item.askingCents, 'Item asking price'); if (item.minimumOfferCents !== undefined) cents(item.minimumOfferCents, 'Item minimum offer')
     assert(Number.isSafeInteger(item.quantity) && item.quantity >= 0, `Item ${item.id} quantity is invalid.`)
     if (item.lotId !== null) { assert(lots.has(item.lotId), `Item ${item.id} references a missing purchase lot.`); allocations.set(item.lotId, (allocations.get(item.lotId) ?? 0) + item.costCents) }
   }
@@ -73,7 +73,7 @@ export function validateData(data) {
   const soldUnits = new Set()
   const groups = new Set((data.purchaseGroups ?? []).map((group) => group.id))
   for (const lot of data.lots) if (lot.reportingGroupId) assert(groups.has(lot.reportingGroupId), `Purchase lot ${lot.id} references a missing reporting group.`)
-  for (const lot of data.lots) assert((allocations.get(lot.id) ?? 0) <= lot.purchaseCents + lot.expensesCents, `Item allocations exceed purchase lot ${lot.id}.`)
+  for (const lot of data.lots) assert((allocations.get(lot.id) ?? 0) <= lot.purchaseCents + lot.expensesCents + (lot.allocationRoundingAdjustmentCents ?? 0), `Item allocations exceed purchase lot ${lot.id}.`)
   for (const sale of data.sales) {
     for (const key of ['grossCents', 'feeCents', 'shippingCents', 'otherExpenseCents', 'receivedCents', 'refundCents', 'creditCents']) cents(sale[key], `Sale ${sale.id} ${key}`)
     for (const line of sale.lines ?? []) { assert(items.has(line.itemId), `Sale ${sale.id} references missing item ${line.itemId}.`); assert(Number.isSafeInteger(line.quantity) && line.quantity > 0, `Sale ${sale.id} line quantity is invalid.`); assert(!line.unitIds || line.unitIds.length === line.quantity, `Sale ${sale.id} unit IDs do not match its quantity.`); cents(line.allocatedCostCents, 'Allocated acquisition cost'); cents(line.proceedsCents ?? 0, 'Allocated proceeds'); for (const [index, unitId] of (line.unitIds ?? []).entries()) { const unit = unitById.get(unitId); assert(unit && unit.itemId === line.itemId, `Sale ${sale.id} references an invalid inventory unit ${unitId}.`); if (index >= (line.returnedQuantity ?? 0)) { assert(!soldUnits.has(unitId), `Inventory unit ${unitId} appears in multiple unreturned sales.`); soldUnits.add(unitId) } } }

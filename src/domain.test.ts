@@ -21,6 +21,7 @@ describe('exact cents and lot accounting',()=>{
   it('parses decimal amounts without binary floating point',()=>{expect(dollarsToCents('54.78')).toBe(5478);expect(dollarsToCents('0.09')).toBe(9);expect(()=>dollarsToCents('2.005')).toThrow()})
   it('totals purchase lot price plus additional acquisition expenses',()=>{expect(lotTotalCents(fixture.lots[0])).toBe(10500)})
   it('reconciles allocations and exposes the remainder',()=>{expect(allocatedCostCents(fixture,'lot-a')).toBe(9000);expect(lotUnallocatedCents(fixture,fixture.lots[0])).toBe(1500)})
+  it('keeps actual cash investment separate from explicitly rounded item allocations',()=>{const lot={id:'rounding-test',name:'Rounding test',date:'2026-11-07',source:'Test source',purchaseCents:100,expensesCents:0,allocationRoundingAdjustmentCents:2};const items=Array.from({length:3},(_,index)=>({id:`rounding-${index}`,title:`Test item ${index}`,category:'Other',quantity:1,lotId:'rounding-test',costCents:34,askingCents:500,minimumOfferCents:300,platform:'Test platform',status:'draft' as const}));const data={...fixture,lots:[lot],items,sales:[],expenses:[],credit:[]};expect(allocatedCostCents(data,'rounding-test')).toBe(102);expect(lotUnallocatedCents(data,lot)).toBe(0);expect(getMetrics(data).purchaseInvestmentCents).toBe(100);expect(getMetrics(data).overallCashPositionCents).toBe(-100);expect(getMetrics(data).remainingInventoryCostCents).toBe(102);expect(getMetrics(data).unsoldAskingCents).toBe(1500)})
 })
 
 describe('sales and cash accounting',()=>{
