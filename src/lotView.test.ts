@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { InventoryItem, TrackerData } from './domain'
 import { getMetrics } from './domain'
-import { PRIMARY_NAVIGATION, sortLotInventoryItems, summarizeLot } from './lotView'
+import { itemSales, PRIMARY_NAVIGATION, realizedLotProfitCents, sortLotInventoryItems, summarizeLot } from './lotView'
 
 const sampleInventory = (): TrackerData => {
   const items = [
@@ -91,6 +91,38 @@ describe('lot-first inventory view', () => {
     const data = sampleInventory()
     data.lots[0].fieldVerification = { purchaseCents: 'estimated' }
     expect(summarizeLot(data, data.lots[0]).cashPositionCents).toBe(0)
+  })
+
+  it('includes lot-linked buyback cash while keeping lot store credit separate', () => {
+    const data = sampleInventory()
+    data.items[0].externalId = 'sample-a'
+    data.ledgerTransactions = [
+      { id: 'cash-a', externalSource: 'migration', externalId: 'cash-a', type: 'buyback_payout', date: '2026-11-04', platform: 'Half Price Books', lotId: 'lot-a', grossCents: 206, feesCents: 0, expensesCents: 0, receivedCents: 206, creditCents: 0, expectedCents: 0, paymentStatus: 'confirmed', itemExternalIds: ['sample-a'], itemQuantities: [1], fieldVerification: { grossCents: 'confirmed', receivedCents: 'confirmed' } },
+      { id: 'credit-a', externalSource: 'migration', externalId: 'credit-a', type: 'store_credit', date: '2026-11-04', platform: 'Vintage Stock', lotId: 'lot-a', grossCents: 0, feesCents: 0, expensesCents: 0, receivedCents: 0, creditCents: 720, creditDirection: 'issued', expectedCents: 0, paymentStatus: 'confirmed', fieldVerification: { creditCents: 'confirmed' } },
+      { id: 'pending-a', externalSource: 'migration', externalId: 'pending-a', type: 'pending_offer', date: '', platform: 'World of Books', lotId: 'lot-a', grossCents: 0, feesCents: 0, expensesCents: 0, receivedCents: 0, creditCents: 0, expectedCents: 4269, paymentStatus: 'pending', fieldVerification: { expectedCents: 'pending' } },
+    ]
+    const summary = summarizeLot(data, data.lots[0])
+    expect(summary.cashReceivedCents).toBe(206)
+    expect(summary.grossConfirmedSalesCents).toBe(206)
+    expect(summary.storeCreditReceivedCents).toBe(720)
+    expect(summary.pendingOfferCents).toBe(4269)
+    expect(summary.cashPositionCents).toBe(-694)
+    expect(getMetrics(data).netCashProceedsCents).toBe(206)
+    expect(getMetrics(data).storeCreditBalanceCents).toBe(720)
+    expect(getMetrics(data).pendingOfferValueCents).toBe(4269)
+    const pendingGross = itemSales(data, data.items[0])[0]
+    expect(pendingGross.grossCents).toBe(206)
+    expect(getMetrics({ ...data, ledgerTransactions: [{ ...data.ledgerTransactions![0], externalId: 'unpaid-sale', type: 'cash_sale', grossCents: 2000, receivedCents: 0, expectedCents: 0, paymentStatus: 'pending', itemExternalIds: [data.items[0].externalId!], itemQuantities: [1], fieldVerification: { grossCents: 'confirmed', expectedCents: 'unknown' } }] }).expectedFutureProceedsCents).toBe(0)
+  })
+
+  it('counts verified migrated item profit in the correct lot only after cash confirmation', () => {
+    const data = sampleInventory()
+    data.items[0].externalId = 'golf'
+    data.ledgerTransactions = [{ id: 'payout', externalSource: 'migration', externalId: 'payout', type: 'buyback_payout', date: '2026-11-01', platform: 'Play It Again Sports', lotId: 'lot-a', grossCents: 2000, feesCents: 0, expensesCents: 0, receivedCents: 2000, creditCents: 0, expectedCents: 0, paymentStatus: 'confirmed', itemExternalIds: ['golf'], itemQuantities: [1], saleAllocatedCostCents: [900], saleAllocatedProceedsCents: [2000], saleCostVerified: [true], fieldVerification: { receivedCents: 'confirmed' } }]
+    expect(realizedLotProfitCents(data, 'lot-a')).toBe(1100)
+    expect(realizedLotProfitCents(data, 'other-lot')).toBe(0)
+    data.ledgerTransactions[0].paymentStatus = 'pending'
+    expect(realizedLotProfitCents(data, 'lot-a')).toBe(0)
   })
 
   it('keeps a historical suggested price out of confirmed asking value and cash proceeds', () => {

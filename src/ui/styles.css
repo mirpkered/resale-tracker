@@ -89,6 +89,7 @@ html[data-theme=dark] .startup-error{background:#3a2822;border-color:#634538;col
 
 /* Lot-first mobile views */
 .lot-card-list,.lot-item-list,.settings-card-list,.monthly-card-list{display:grid;gap:12px;min-width:0}
+.lot-acquisitions{display:grid;gap:8px;padding:12px;border:1px solid var(--line);border-radius:9px;background:var(--bg)}.lot-acquisitions>b{font-size:12px}.lot-acquisitions>div{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:3px 10px;font-size:11px}.lot-acquisitions>div span{overflow-wrap:anywhere}.lot-acquisitions>div strong{white-space:nowrap}.lot-acquisitions>div small{grid-column:1/-1;color:var(--muted);line-height:1.4}
 .lot-card{padding:0;overflow:hidden}
 .lot-card-main{width:100%;min-width:0;display:grid;gap:15px;padding:17px;text-align:left;color:var(--text);background:transparent;border:0}
 .lot-card-heading{display:grid;grid-template-columns:38px minmax(0,1fr) 22px;gap:11px;align-items:center;min-width:0}

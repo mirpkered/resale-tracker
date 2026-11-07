@@ -32,10 +32,25 @@ export function validateData(data) {
   uniqueIds(data.expenses, 'expense'); uniqueIds(data.credit, 'store-credit transaction'); uniqueIds(data.platforms, 'platform')
   if (data.purchaseGroups !== undefined) uniqueIds(data.purchaseGroups, 'purchase group')
   if (data.units !== undefined) uniqueIds(data.units, 'inventory unit')
+  for (const lot of data.lots) if (lot.acquisitions !== undefined) {
+    assert(Array.isArray(lot.acquisitions), `Lot ${lot.id} acquisitions must be an array.`)
+    const acquisitionIds = new Set()
+    let acquisitionTotal = 0
+    for (const acquisition of lot.acquisitions) {
+      assert(typeof acquisition.id === 'string' && acquisition.id.length > 0 && !acquisitionIds.has(acquisition.id), `Lot ${lot.id} has a missing or duplicate acquisition ID.`)
+      acquisitionIds.add(acquisition.id)
+      assert(typeof acquisition.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(acquisition.date), `Acquisition ${acquisition.id} requires an ISO date.`)
+      assert(typeof acquisition.source === 'string' && acquisition.source.length > 0, `Acquisition ${acquisition.id} requires a source.`)
+      cents(acquisition.purchaseCents, `Acquisition ${acquisition.id} cost`)
+      acquisitionTotal += acquisition.purchaseCents
+    }
+    assert(acquisitionTotal === lot.purchaseCents, `Lot ${lot.id} acquisition costs must reconcile to its purchase cost.`)
+  }
   if (data.ledgerTransactions !== undefined) {
     uniqueIds(data.ledgerTransactions, 'ledger transaction')
     const external = new Set()
     for (const transaction of data.ledgerTransactions) {
+      if (transaction.lotId !== undefined) assert(lots.has(transaction.lotId), `Ledger transaction ${transaction.externalId ?? transaction.id} references a missing purchase lot.`)
       const key = `${transaction.externalSource}:${transaction.externalId}`
       assert(transaction.externalSource && transaction.externalId && !external.has(key), `Missing or duplicate ledger external ID: ${key}`); external.add(key)
       for (const field of ['grossCents', 'feesCents', 'expensesCents', 'receivedCents', 'creditCents', 'expectedCents']) cents(transaction[field], `Ledger ${field}`)
