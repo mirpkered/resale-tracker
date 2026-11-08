@@ -63,9 +63,9 @@ Item `allocatedCostCents` totals for each lot may not exceed that lot's purchase
 
 Each `inventoryItems` record has `externalId`, `title`, and positive integer `quantity`. Optional values include `lotExternalId`, description, category, allocated cost, prices, platform, listing URL, image URL, notes, and `unitExternalIds`. If `unitExternalIds` is supplied, provide one distinct stable ID per copy. The app also creates an individual internal unit ID for every copy where unit IDs were omitted.
 
-`listingState` is either `draft_suggestion` or `confirmed_active`. An item becomes an active listing only when `listingState` is `confirmed_active` **and** `verification.listingState` is `confirmed`. Suggested titles/prices or a generated listing draft remain unlisted/draft. `askingCents` is for a confirmed asking price; `suggestedAskingCents` is kept separately.
+`listingState` is either `draft_suggestion` or `confirmed_active`. An item becomes an active listing only when `listingState` is `confirmed_active` **and** `verification.listingState` is `confirmed`. Suggested titles/prices or generated listing text remain unlisted. Legacy `draft_suggestion` input is accepted but normalized to `acquired` until publication is explicitly confirmed. `askingCents` is for a confirmed asking price; `suggestedAskingCents` is kept separately.
 
-Optional `inventoryStatus` supports the app statuses `acquired`, `draft`, `active`, `reserved`, `awaiting_payment`, `awaiting_fulfillment`, `completed`, `returned`, `traded`, `donated`, or `disposed`. It applies only when `verification.inventoryStatus` is `confirmed`.
+Optional `inventoryStatus` supports the app statuses `acquired`, `active`, `reserved`, `awaiting_payment`, `awaiting_fulfillment`, `completed`, `returned`, `traded`, `donated`, or `disposed`. It applies only when `verification.inventoryStatus` is `confirmed`.
 
 ```json
 {

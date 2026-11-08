@@ -38,4 +38,4 @@ export function sortInventoryItems(items: InventoryItem[], sort: InventorySort):
   })
 }
 
-export const inventoryStatuses: ItemStatus[] = ['acquired', 'draft', 'active', 'reserved', 'awaiting_payment', 'awaiting_fulfillment', 'completed', 'returned', 'retained', 'traded', 'donated', 'disposed']
+export const inventoryStatuses: ItemStatus[] = ['acquired', 'active', 'reserved', 'awaiting_payment', 'awaiting_fulfillment', 'completed', 'returned', 'retained', 'traded', 'donated', 'disposed']

@@ -20,7 +20,7 @@ export interface LocalAuditEvent { id: string; at: string; action: string; summa
 export interface TrackerData { lots: PurchaseLot[]; items: InventoryItem[]; sales: Sale[]; expenses: CashExpense[]; credit: StoreCreditTransaction[]; platforms: Platform[]; purchaseGroups?: PurchaseGroup[]; units?: InventoryUnit[]; ledgerTransactions?: LedgerTransaction[]; auditEvents?: LocalAuditEvent[] }
 
 export const STATUS_LABELS: Record<ItemStatus, string> = {
-  acquired: 'Acquired / Unlisted', draft: 'Draft Listing', active: 'Active Listing', reserved: 'Reserved',
+  acquired: 'Acquired / Unlisted', draft: 'Acquired / Unlisted', active: 'Listed', reserved: 'Reserved',
   awaiting_payment: 'Sold / Awaiting Payment', awaiting_fulfillment: 'Paid / Awaiting Fulfillment', completed: 'Sold / Complete',
   returned: 'Returned', retained: 'Retained / Personal Use', traded: 'Traded', donated: 'Donated', disposed: 'Disposed',
 }
@@ -109,10 +109,10 @@ export function getMetrics(data: TrackerData) {
 
 export function transitionStatus(current: ItemStatus, next: ItemStatus): ItemStatus {
   const allowed: Record<ItemStatus, ItemStatus[]> = {
-    acquired: ['draft', 'active', 'retained', 'traded', 'donated', 'disposed'], draft: ['acquired', 'active', 'reserved', 'retained', 'traded', 'donated', 'disposed'],
-    active: ['draft', 'reserved', 'awaiting_payment', 'retained', 'traded', 'donated', 'disposed'], reserved: ['active', 'awaiting_payment', 'retained', 'traded', 'donated', 'disposed'],
+    acquired: ['active', 'retained', 'traded', 'donated', 'disposed'], draft: ['acquired', 'active', 'reserved', 'retained', 'traded', 'donated', 'disposed'],
+    active: ['acquired', 'reserved', 'awaiting_payment', 'retained', 'traded', 'donated', 'disposed'], reserved: ['active', 'awaiting_payment', 'retained', 'traded', 'donated', 'disposed'],
     awaiting_payment: ['active', 'awaiting_fulfillment', 'completed', 'returned'], awaiting_fulfillment: ['active', 'completed', 'returned'],
-    completed: ['returned'], returned: ['active', 'draft', 'retained', 'traded', 'donated', 'disposed'], retained: ['acquired', 'draft', 'active', 'traded', 'donated', 'disposed'], traded: [], donated: [], disposed: [],
+    completed: ['returned'], returned: ['active', 'acquired', 'retained', 'traded', 'donated', 'disposed'], retained: ['acquired', 'active', 'traded', 'donated', 'disposed'], traded: [], donated: [], disposed: [],
   }
   if (current !== next && !allowed[current].includes(next)) throw new Error(`Cannot change status from ${STATUS_LABELS[current]} to ${STATUS_LABELS[next]}.`)
   return next
@@ -135,6 +135,9 @@ export function parseImport(input: string): ResaleImport {
     if (record.confirmedPrice !== undefined) dollarsToCents(record.confirmedPrice)
     if (record.suggestedPrice !== undefined) dollarsToCents(record.suggestedPrice)
     if (record.status !== undefined && !(record.status in STATUS_LABELS)) throw new Error(`Invalid listing status for ${record.title}.`)
+    // Schema 1.0 remains compatible with old imports; an unconfirmed draft is
+    // represented as unlisted because listings are either published or not.
+    if (record.status === 'draft') record.status = 'acquired'
   }
   return payload
 }

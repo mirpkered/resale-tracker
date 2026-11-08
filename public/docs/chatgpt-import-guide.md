@@ -44,7 +44,7 @@ Use exactly one status for each imported field:
 - `pending`: awaiting payment, confirmation, or reconciliation.
 - `unknown`: not available in the source material.
 
-Unknown or absent values must not be invented. Listing suggestions stay drafts. A record is an active listing only when it has `listingState: "confirmed_active"` and `verification.listingState: "confirmed"`.
+Unknown or absent values must not be invented. A suggested title or price is unlisted until publication is confirmed. A record is listed only when it has `listingState: "confirmed_active"` and `verification.listingState: "confirmed"`. Legacy `draft_suggestion` / `draft` inputs are accepted for compatibility and represented as unlisted.
 
 ## Stable identifiers and repeat imports
 
@@ -71,7 +71,7 @@ For historical updates, include the complete record again with its original ID. 
 - `allocatedCostCents` is this item's total acquisition allocation across its copies.
 - `askingCents` is a confirmed current asking price; `suggestedAskingCents` is kept separately.
 - `quantity` is the number of copies represented. Supply a unique `unitExternalIds` entry for every tracked copy, or let the app generate internal copy IDs.
-- Supported statuses: `acquired`, `draft`, `active`, `reserved`, `awaiting_payment`, `awaiting_fulfillment`, `completed`, `returned`, `retained`, `traded`, `donated`, `disposed`. Use `retained` when an item is kept for personal use and is no longer available for sale; its cost remains reported separately from saleable inventory cost.
+- Supported statuses: `acquired` (unlisted), `active` (listed), `reserved`, `awaiting_payment`, `awaiting_fulfillment`, `completed`, `returned`, `retained`, `traded`, `donated`, `disposed`. Legacy `draft` input is normalized to `acquired`. Use `retained` when an item is kept for personal use and is no longer available for sale; its cost remains reported separately from saleable inventory cost.
 
 ### Transactions
 
@@ -93,7 +93,7 @@ These are user-supplied reference facts, not seeded records. Validate the indivi
 
 - If multiple receipts belong to one reporting group, create one lot per receipt and link them to the group. Never add a group-level purchase transaction or duplicate member-lot cost.
 - Use only records verified in the source conversation, receipts, or current app. Do not infer a sale, pending transaction, proceeds, or inventory quantity from a listing or offer suggestion.
-- For duplicate merchandise, assign a distinct stable copy ID to each physical unit. Estimated purchase costs and suggested listing values must remain marked unconfirmed until verified. Listing text remains a draft until the listing is confirmed active.
+- For duplicate merchandise, assign a distinct stable copy ID to each physical unit. Estimated purchase costs and suggested listing values must remain marked unconfirmed until verified. Suggested listing text remains unlisted until publication is confirmed.
 
 The app does not automatically generate those records. The user still has to approve the final preview.
 
