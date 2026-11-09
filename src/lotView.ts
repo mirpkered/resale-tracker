@@ -1,6 +1,14 @@
-import { ACTIVE_STATUSES, allocateCents, isFieldConfirmed, lineNetProceedsCents, receivedCashCents, retainedCostCents, type InventoryItem, type LedgerTransaction, type PurchaseLot, type Sale, type TrackerData } from './domain'
+import { ACTIVE_STATUSES, allocateCents, isFieldConfirmed, lineNetProceedsCents, lotUnallocatedCents, receivedCashCents, retainedCostCents, type InventoryItem, type LedgerTransaction, type PurchaseLot, type Sale, type TrackerData } from './domain'
 
 export const PRIMARY_NAVIGATION = ['Dashboard', 'Lots', 'Settings'] as const
+
+/** Flags reconciliation caveats already recorded in lot metadata, without changing records. */
+export function lotReconciliationStatus(data: TrackerData, lot: PurchaseLot) {
+  const notes = lot.notes ?? ''
+  const inventoryIncomplete = /(?:\b\d+\s+(?:titles|items|packages)\s+(?:remain|are)\s+(?:unresolved|unidentified|unknown)|\b(?:unresolved|unidentified|not[- ]yet[- ]identified)\s+(?:inventory|items|titles|packages)|(?:item|inventory)\s+(?:details|records|quantity)\s+(?:are\s+)?unknown|(?:unknown|unidentified)\s+(?:items|inventory|quantity|titles))/i.test(notes)
+  const unallocatedCostCents = lotUnallocatedCents(data, lot)
+  return { inventoryIncomplete, unallocatedCostCents, hasWarnings: inventoryIncomplete || unallocatedCostCents !== 0 }
+}
 
 const SOLD_STATUSES = new Set(['awaiting_payment', 'awaiting_fulfillment', 'completed'])
 const END_STATUSES = new Set(['retained', 'traded', 'donated'])

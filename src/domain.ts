@@ -77,6 +77,7 @@ export function getMetrics(data: TrackerData) {
   const saleCash=data.sales.reduce((sum, sale) => sum + (isFieldConfirmed(sale,'receivedCents')?receivedCashCents(sale):0), 0)
   const transactionCash=(data.ledgerTransactions??[]).filter((t)=>['cash_sale','buyback_payout'].includes(t.type)&&t.paymentStatus==='confirmed'&&isFieldConfirmed(t,'receivedCents')).reduce((sum,t)=>sum+t.receivedCents,0)
   const netCashProceedsCents = saleCash+transactionCash
+  const sellingExpensesCents = data.sales.filter((sale)=>sale.paymentStatus!=='unpaid').reduce((sum,sale)=>sum+(isFieldConfirmed(sale,'feeCents')?sale.feeCents:0)+(isFieldConfirmed(sale,'shippingCents')?sale.shippingCents:0)+(isFieldConfirmed(sale,'otherExpenseCents')?sale.otherExpenseCents:0),0)+(data.ledgerTransactions??[]).filter((t)=>['cash_sale','buyback_payout'].includes(t.type)&&t.paymentStatus==='confirmed').reduce((sum,t)=>sum+(isFieldConfirmed(t,'feesCents')?t.feesCents:0)+(isFieldConfirmed(t,'shippingCents')?t.shippingCents??0:0)+(isFieldConfirmed(t,'expensesCents')?t.expensesCents:0),0)
   const expectedSales=data.sales.filter((sale)=>sale.paymentStatus==='unpaid').reduce((sum,sale)=>sum+(isFieldConfirmed(sale,'grossCents')?Math.max(0,sale.grossCents-sale.feeCents-sale.shippingCents-sale.otherExpenseCents-sale.refundCents):0),0)
   const expectedAmount=(transaction:LedgerTransaction)=>transaction.fieldVerification?.expectedCents==='unknown'?0:(transaction.expectedCents||Math.max(0,transaction.grossCents-transaction.feesCents-(transaction.shippingCents??0)-transaction.expensesCents))
   const pendingOfferValueCents=(data.ledgerTransactions??[]).filter((t)=>t.type==='pending_offer'&&t.paymentStatus!=='confirmed').reduce((sum,t)=>sum+expectedAmount(t),0)
@@ -93,14 +94,16 @@ export function getMetrics(data: TrackerData) {
   const remainingCost=(item:InventoryItem)=>{const saleCost=data.sales.flatMap((sale)=>sale.lines??[]).filter((line)=>line.itemId===item.id).reduce((cost,line)=>cost+retainedCostCents(line),0),ledgerCost=(data.ledgerTransactions??[]).reduce((total,entry)=>{const index=entry.itemExternalIds?.findIndex((id)=>id===item.externalId)??-1;return total+(index>=0?entry.saleAllocatedCostCents?.[index]??0:0)},0);return Math.max(0,item.costCents-saleCost-ledgerCost)}
   const retainedItems=data.items.filter((item)=>item.status==='retained')
   return {
-    purchaseInvestmentCents, estimatedAcquisitionCostCents, netCashProceedsCents, expectedFutureProceedsCents, pendingOfferValueCents, overallCashPositionCents, realizedItemProfitCents:realizedItemProfitCents+migratedSaleProfit,
+    purchaseInvestmentCents, estimatedAcquisitionCostCents, netCashProceedsCents, sellingExpensesCents, expectedFutureProceedsCents, pendingOfferValueCents, overallCashPositionCents, realizedItemProfitCents:realizedItemProfitCents+migratedSaleProfit,
     remainingQuantity: available.reduce((sum, item) => sum + item.quantity, 0),
     retainedQuantity: retainedItems.reduce((sum,item)=>sum+item.quantity,0),
     retainedInventoryCostCents: retainedItems.reduce((sum,item)=>sum+(isFieldConfirmed(item,'costCents')?remainingCost(item):0),0),
     remainingInventoryCostCents: available.reduce((sum, item) => sum + (isFieldConfirmed(item,'costCents')?remainingCost(item):0), 0),
     unverifiedRemainingInventoryCostCents: available.reduce((sum,item)=>sum+(isFieldConfirmed(item,'costCents')?0:remainingCost(item)),0),
-    unsoldAskingCents: available.reduce((sum, item) => sum + (isFieldConfirmed(item,'askingCents')?item.askingCents:0) * item.quantity, 0),
-    unverifiedAskingValueCents: available.reduce((sum,item)=>sum+(isFieldConfirmed(item,'askingCents')?0:item.askingCents*item.quantity),0),
+    // Asking value is a current listing metric, not a valuation of every
+    // available item. Keep unlisted and draft inventory out of it.
+    unsoldAskingCents: available.filter((item) => item.status === 'active').reduce((sum, item) => sum + (isFieldConfirmed(item,'askingCents')?item.askingCents:0) * item.quantity, 0),
+    unverifiedAskingValueCents: available.filter((item) => item.status === 'active').reduce((sum,item)=>sum+(isFieldConfirmed(item,'askingCents')?0:item.askingCents*item.quantity),0),
     suggestedAskingValueCents: available.reduce((sum,item)=>sum+(item.suggestedAskingCents??0)*item.quantity,0),
     storeCreditBalanceCents: storeCreditBalanceCents(data)+(data.ledgerTransactions??[]).filter((t)=>t.type==='store_credit'&&t.paymentStatus==='confirmed'&&isFieldConfirmed(t,'creditCents')).reduce((sum,t)=>sum+(t.creditDirection==='redeemed'?-t.creditCents:t.creditCents),0),
     rewardsBalanceCents: (data.ledgerTransactions??[]).filter((t)=>t.type==='reward'&&t.paymentStatus==='confirmed'&&isFieldConfirmed(t,'creditCents')).reduce((sum,t)=>sum+(t.creditDirection==='redeemed'?-t.creditCents:t.creditCents),0),
