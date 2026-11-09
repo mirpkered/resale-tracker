@@ -25,6 +25,8 @@ export interface LotSummary {
   storeCreditReceivedCents: number
   pendingOfferCents: number
   cashPositionCents: number
+  estimatedCashPositionCents: number
+  estimatedInvestment: boolean
   itemCount: number
 }
 
@@ -103,15 +105,18 @@ export function summarizeLot(data: TrackerData, lot: PurchaseLot): LotSummary {
   const storeCreditReceivedCents = ledger.creditCents
   const pendingOfferCents = ledger.pendingCents
   const cost = (isFieldConfirmed(lot, 'purchaseCents') ? lot.purchaseCents : 0) + (isFieldConfirmed(lot, 'expensesCents') ? lot.expensesCents : 0)
-  return { lot, purchased, sold, remaining, grossConfirmedSalesCents, cashReceivedCents, storeCreditReceivedCents, pendingOfferCents, cashPositionCents: cashReceivedCents - cost, itemCount: items.length }
+  const estimatedInvestment = !isFieldConfirmed(lot, 'purchaseCents') || !isFieldConfirmed(lot, 'expensesCents')
+  return { lot, purchased, sold, remaining, grossConfirmedSalesCents, cashReceivedCents, storeCreditReceivedCents, pendingOfferCents, cashPositionCents: cashReceivedCents - cost, estimatedCashPositionCents: cashReceivedCents - lot.purchaseCents - lot.expensesCents, estimatedInvestment, itemCount: items.length }
 }
 
-export function itemSales(data: TrackerData, item: InventoryItem) {
+export interface ItemSaleRecord { sale: Sale; grossCents: number; quantity: number; proceedsAllocated: boolean }
+
+export function itemSales(data: TrackerData, item: InventoryItem): ItemSaleRecord[] {
   const recorded = data.sales.flatMap((sale) => {
     const lines = sale.lines ?? []
     const lineIndexes = lines.map((line, index) => line.itemId === item.id ? index : -1).filter((index) => index >= 0)
     const gross = lineIndexes.reduce((sum, index) => sum + grossForLine(sale, index), 0)
-    if (gross || sale.itemIds.includes(item.id)) return [{ sale, grossCents: lines.length ? gross : saleGrossForItem(sale, item.id), quantity: lines.filter((line) => line.itemId === item.id).reduce((sum, line) => sum + line.quantity, 0) || 1 }]
+    if (gross || sale.itemIds.includes(item.id)) return [{ sale, grossCents: lines.length ? gross : saleGrossForItem(sale, item.id), quantity: lines.filter((line) => line.itemId === item.id).reduce((sum, line) => sum + line.quantity, 0) || 1, proceedsAllocated: true }]
     return []
   })
   const migrated = (data.ledgerTransactions ?? []).flatMap((entry) => {
@@ -119,13 +124,14 @@ export function itemSales(data: TrackerData, item: InventoryItem) {
     if (index < 0 || !['cash_sale', 'buyback_payout'].includes(entry.type)) return []
     const quantities = entry.itemQuantities ?? entry.itemExternalIds?.map(() => 1) ?? []
     const quantity = quantities[index] ?? 1
-    const gross = allocateCents(entry.grossCents, quantities)[index] ?? 0
+    const proceedsAllocated = entry.itemExternalIds?.length === 1 || Boolean(entry.saleAllocatedProceedsCents)
+    const gross = proceedsAllocated ? (entry.saleAllocatedProceedsCents?.[index] ?? allocateCents(entry.grossCents, quantities)[index] ?? 0) : entry.grossCents
     const fee = allocateCents(entry.feesCents, quantities)[index] ?? 0
     const shipping = allocateCents(entry.shippingCents ?? 0, quantities)[index] ?? 0
     const expense = allocateCents(entry.expensesCents, quantities)[index] ?? 0
     const received = allocateCents(entry.receivedCents, quantities)[index] ?? 0
-    const paymentStatus = entry.paymentStatus === 'confirmed' ? 'paid' : 'unpaid'
-    return [{ sale: { id: entry.id, date: entry.date, platform: entry.platform ?? 'Other', grossCents: gross, feeCents: fee, shippingCents: shipping, otherExpenseCents: expense, paymentStatus, receivedCents: received, refundCents: 0, creditCents: 0, itemIds: [item.id], lines: [{ itemId: item.id, quantity, allocatedCostCents: entry.saleAllocatedCostCents?.[index] ?? 0, proceedsCents: entry.saleAllocatedProceedsCents?.[index] ?? 0, unitIds: entry.itemUnitIds?.[index] }], status: entry.paymentStatus === 'confirmed' ? 'completed' : 'open', notes: entry.notes, fieldVerification: entry.fieldVerification }, grossCents: gross, quantity }]
+    const paymentStatus: Sale['paymentStatus'] = entry.paymentStatus === 'confirmed' ? 'paid' : 'unpaid'
+    return [{ sale: { id: entry.id, date: entry.date, platform: entry.platform ?? 'Other', grossCents: gross, feeCents: fee, shippingCents: shipping, otherExpenseCents: expense, paymentStatus, receivedCents: received, refundCents: 0, creditCents: 0, itemIds: [item.id], lines: [{ itemId: item.id, quantity, allocatedCostCents: entry.saleAllocatedCostCents?.[index] ?? 0, proceedsCents: entry.saleAllocatedProceedsCents?.[index] ?? 0, unitIds: entry.itemUnitIds?.[index] }], status: (entry.paymentStatus === 'confirmed' ? 'completed' : 'open') as Sale['status'], notes: entry.notes, fieldVerification: entry.fieldVerification }, grossCents: gross, quantity, proceedsAllocated }]
   })
   return [...recorded, ...migrated]
 }
@@ -144,7 +150,7 @@ export function realizedLotProfitCents(data: TrackerData, lotId: string): number
   const itemIds = new Set(items.filter((item) => isFieldConfirmed(item, 'costCents')).map((item) => item.id))
   const externalIds = new Set(items.map((item) => item.externalId).filter((value): value is string => Boolean(value)))
   const recorded = data.sales.filter((sale) => sale.status === 'completed' && isFieldConfirmed(sale, 'receivedCents') && ['paid', 'partial', 'refunded'].includes(sale.paymentStatus)).reduce((sum, sale) => sum + (sale.lines ?? []).filter((line) => itemIds.has(line.itemId)).reduce((lineSum, line) => lineSum + lineNetProceedsCents(sale, line) - line.allocatedCostCents, 0), 0)
-  const imported = (data.ledgerTransactions ?? []).filter((entry) => ['cash_sale', 'buyback_payout'].includes(entry.type) && entry.paymentStatus === 'confirmed' && isFieldConfirmed(entry, 'receivedCents') && (entry.lotId === lotId || (entry.itemExternalIds ?? []).some((id) => externalIds.has(id))) && Boolean(entry.saleAllocatedCostCents?.length)).reduce((sum, entry) => sum + (entry.saleAllocatedProceedsCents ?? []).reduce((total, value, index) => total + (entry.saleCostVerified?.[index] ? value : 0), 0) - (entry.saleAllocatedCostCents ?? []).reduce((total, value, index) => total + (entry.saleCostVerified?.[index] ? value : 0), 0), 0)
+  const imported = (data.ledgerTransactions ?? []).filter((entry) => ['cash_sale', 'buyback_payout'].includes(entry.type) && entry.paymentStatus === 'confirmed' && isFieldConfirmed(entry, 'receivedCents') && (entry.lotId === lotId || (entry.itemExternalIds ?? []).some((id) => externalIds.has(id))) && Boolean(entry.saleAllocatedCostCents?.length) && entry.saleAllocatedProceedsCents?.length === entry.saleAllocatedCostCents?.length).reduce((sum, entry) => sum + (entry.saleAllocatedProceedsCents ?? []).reduce((total, value, index) => total + (entry.saleCostVerified?.[index] ? value : 0), 0) - (entry.saleAllocatedCostCents ?? []).reduce((total, value, index) => total + (entry.saleCostVerified?.[index] ? value : 0), 0), 0)
   return recorded + imported
 }
 

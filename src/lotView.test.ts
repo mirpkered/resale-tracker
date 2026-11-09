@@ -93,6 +93,18 @@ describe('lot-first inventory view', () => {
     expect(summarizeLot(data, data.lots[0]).cashPositionCents).toBe(0)
   })
 
+  it('shows estimated investment cash recovery separately from confirmed cash position', () => {
+    const data = sampleInventory()
+    data.lots[0].purchaseCents = 2500
+    data.lots[0].fieldVerification = { purchaseCents: 'estimated', expensesCents: 'unknown' }
+    data.items[0].externalId = 'jp-game-a'
+    data.ledgerTransactions = [{ id: 'jp-bundle', externalSource: 'migration', externalId: 'jp-bundle', type: 'cash_sale', date: '', platform: 'Vinted', lotId: 'lot-a', grossCents: 950, feesCents: 0, expensesCents: 0, receivedCents: 950, creditCents: 0, expectedCents: 0, paymentStatus: 'confirmed', itemExternalIds: ['jp-game-a'], itemQuantities: [1], fieldVerification: { receivedCents: 'confirmed' } }]
+    const summary = summarizeLot(data, data.lots[0])
+    expect(summary.cashPositionCents).toBe(950)
+    expect(summary.estimatedInvestment).toBe(true)
+    expect(summary.estimatedCashPositionCents).toBe(-1550)
+  })
+
   it('includes lot-linked buyback cash while keeping lot store credit separate', () => {
     const data = sampleInventory()
     data.items[0].externalId = 'sample-a'
@@ -122,6 +134,18 @@ describe('lot-first inventory view', () => {
     expect(realizedLotProfitCents(data, 'lot-a')).toBe(1100)
     expect(realizedLotProfitCents(data, 'other-lot')).toBe(0)
     data.ledgerTransactions[0].paymentStatus = 'pending'
+    expect(realizedLotProfitCents(data, 'lot-a')).toBe(0)
+  })
+
+  it('shows an unallocated bundle total without presenting it as an individual item price', () => {
+    const data = sampleInventory()
+    data.items[0].externalId = 'bundle-copy-a'
+    data.items[2].externalId = 'bundle-copy-b'
+    data.ledgerTransactions = [{ id: 'bundle-sale', externalSource: 'migration', externalId: 'bundle-sale', type: 'cash_sale', date: '', platform: 'Vinted', lotId: 'lot-a', grossCents: 950, feesCents: 0, shippingCents: 0, expensesCents: 0, receivedCents: 950, creditCents: 0, expectedCents: 0, paymentStatus: 'confirmed', itemExternalIds: ['bundle-copy-a', 'bundle-copy-b'], itemQuantities: [1, 1], itemUnitIds: [['unit-1'], ['unit-3']], saleAllocatedCostCents: [300, 300], saleCostVerified: [true, true], fieldVerification: { grossCents: 'confirmed', receivedCents: 'confirmed' } }]
+    const details = itemSales(data, data.items[0])[0]
+    expect(details.grossCents).toBe(950)
+    expect(details.proceedsAllocated).toBe(false)
+    expect(summarizeLot(data, data.lots[0]).cashReceivedCents).toBe(950)
     expect(realizedLotProfitCents(data, 'lot-a')).toBe(0)
   })
 
