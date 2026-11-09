@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest'
-import stylesheet from './ui/styles.css?raw'
+// @ts-expect-error Vitest executes in Node; Node types are intentionally not included in the browser app.
+import { readFileSync } from 'node:fs'
+
+const stylesheet = readFileSync(new URL('./ui/styles.css', import.meta.url), 'utf8')
 
 describe('speech command mobile layout rules', () => {
   it.each([320, 375, 390])('keeps the diagnostics panel single-column at %i CSS pixels', (width) => {
