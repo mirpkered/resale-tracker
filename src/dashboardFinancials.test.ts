@@ -5,7 +5,7 @@ import { lotReconciliationStatus, summarizeLot } from './lotView'
 function revision18AuditFixture(): TrackerData {
   const lots: TrackerData['lots'] = [
     { id: 'halloween', name: 'Halloween Thrift Store DVD Haul', date: '2026-10-31', source: 'Halloween thrift store sale', purchaseCents: 2300, expensesCents: 0 },
-    { id: 'goodwill', name: 'Goodwill Outlet — November 2026', date: '2026-11-01', source: 'Goodwill Outlet / Goodwill Bins', purchaseCents: 10015, expensesCents: 0 },
+    { id: 'goodwill', name: 'Goodwill Outlet — November 2026', date: '2026-11-01', source: 'Goodwill Outlet / Goodwill Bins', purchaseCents: 10015, expensesCents: 0, notes: 'Costs for other sold/rejected records remain unknown.' },
     { id: 'yard', name: 'Yard Sale — November 7, 2026', date: '2026-11-07', source: 'Yard sale', purchaseCents: 600, expensesCents: 0, allocationRoundingAdjustmentCents: 5, notes: 'Additional DVD purchase has 47 titles remain unresolved.' },
     { id: 'japanese', name: 'Japanese Nintendo DS/3DS Import Lot', date: '', source: 'Vinted', purchaseCents: 2500, expensesCents: 0, fieldVerification: { purchaseCents: 'estimated', expensesCents: 'unknown' } },
   ]
@@ -62,5 +62,9 @@ describe('revision 18 dashboard financial regression', () => {
     expect(status.inventoryIncomplete).toBe(true)
     expect(status.unallocatedCostCents).toBe(311)
     expect(status.hasWarnings).toBe(true)
+  })
+
+  it('flags lots with unitemized historical disposition records', () => {
+    expect(lotReconciliationStatus(data, data.lots[1]).inventoryIncomplete).toBe(true)
   })
 })
