@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { LoaderCircle, Mic, Search, Square, X } from 'lucide-react'
-import type { InventoryItem, TrackerData } from '../domain'
+import type { InventoryItem, LedgerTransaction, Sale, TrackerData } from '../domain'
 import { ACTIVE_STATUSES, dollarsToCents, formatMoney } from '../domain'
 import { QuickSaleFields } from './QuickSaleFields'
 import type { QuickSaleInitial } from '../quickSaleForm'
@@ -9,12 +9,15 @@ import { canProcessVoiceCommand, interpretVoiceTranscript, verifyVoiceCommandSes
 import type { QuickSaleInput } from '../quickSale'
 import { attachSpeechLifecycle, browserSpeechRecognitionAvailable, createOnceGate, SpeechTranscriptBuffer, type SpeechRecognizer, type SpeechWindow } from '../speechRecognition'
 import { formatSpeechDiagnosticReport, type SpeechDiagnosticEvent } from '../speechDiagnostics'
-export function VoiceCommandDialog({ data, authenticated, verifySession, onClose, onConfirmSale }: {
+import { currentFinancialAmount, type FinancialCommandAnalysis, type FinancialCommand } from '../financialVoiceCommand'
+export function VoiceCommandDialog({ data, authenticated, verifySession, onClose, onConfirmSale, onConfirmFinancial, onOpenLot }: {
   data: TrackerData
   authenticated: boolean
   verifySession: () => Promise<void>
   onClose: () => void
   onConfirmSale: (itemId: string, input: QuickSaleInput) => Promise<void>
+  onConfirmFinancial: (command: FinancialCommand, recordId: string | undefined, amountCents: number, expectedRecord: LedgerTransaction | Sale | undefined, markReceived: boolean) => Promise<void>
+  onOpenLot: (lotId: string) => void
 }) {
   const [text, setText] = useState('')
   const [phase, setPhase] = useState<'ready' | 'starting' | 'listening' | 'transcript_received' | 'interpreting' | 'processing' | 'result' | 'cancelled' | 'error'>('ready')
@@ -27,6 +30,9 @@ export function VoiceCommandDialog({ data, authenticated, verifySession, onClose
   const [diagnosticsOpen, setDiagnosticsOpen] = useState(false)
   const [diagnosticsCopied, setDiagnosticsCopied] = useState('')
   const [interpretationAttempts, setInterpretationAttempts] = useState(0)
+  const [financialAmount, setFinancialAmount] = useState('')
+  const [selectedFinancialRecordId, setSelectedFinancialRecordId] = useState('')
+  const [financialReceived, setFinancialReceived] = useState(false)
   const recognitionErrorRef = useRef('')
   const recognitionErrorCodeRef = useRef('')
   const startWatchdogRef = useRef<number | null>(null)
@@ -98,7 +104,17 @@ export function VoiceCommandDialog({ data, authenticated, verifySession, onClose
       setAnalysis(result); setSelectedItemId(result.kind === 'sale' && result.matched ? result.matched.id : '')
       setDetailsOpen(true)
       setPhase('result')
-      if (result.kind === 'unsupported' || result.kind === 'unmatched') setError(result.message)
+      if (result.kind === 'financial') {
+        const matchingId = result.matches.length === 1 ? result.matches[0].id : result.sales.length === 1 ? result.sales[0].id : ''
+        setSelectedFinancialRecordId(matchingId)
+        const amount = currentFinancialAmount(result, matchingId || undefined)
+        setFinancialAmount(amount === undefined ? '' : (amount / 100).toFixed(2))
+        setFinancialReceived(result.command.explicitReceipt)
+      } else {
+        setSelectedFinancialRecordId('')
+        setFinancialAmount('')
+        setFinancialReceived(false)
+      }
     } catch (cause) {
       if (requestId !== interpretationRef.current) return
       setPhase('error'); setError(cause instanceof Error ? cause.message : 'Could not verify your private session. No sale was recorded.')
@@ -229,6 +245,23 @@ export function VoiceCommandDialog({ data, authenticated, verifySession, onClose
     finally { confirmingRef.current = false }
   }
 
+  const confirmFinancial = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    if (analysis?.kind !== 'financial' || confirmingRef.current) return
+    confirmingRef.current = true; setPhase('processing'); setError('')
+    try {
+      await verifyVoiceCommandSession(authenticated, verifySession)
+      const amountCents = dollarsToCents(financialAmount)
+      const expectedRecord = analysis.matches.find((entry) => entry.id === selectedFinancialRecordId) ?? analysis.sales.find((entry)=>entry.id===selectedFinancialRecordId)
+      if (expectedRecord) {
+        const current = 'type' in expectedRecord ? (latestRef.current.data.ledgerTransactions ?? []).find((entry) => entry.id === expectedRecord.id) : latestRef.current.data.sales.find((entry)=>entry.id===expectedRecord.id)
+        if (!current || JSON.stringify(current) !== JSON.stringify(expectedRecord)) throw new Error('This transaction changed while the proposal was open. No change was made. Interpret the command again to review the latest record.')
+      }
+      await onConfirmFinancial(analysis.command, selectedFinancialRecordId || undefined, amountCents, expectedRecord, financialReceived)
+    } catch (cause) { setPhase('result'); setError(cause instanceof Error ? cause.message : 'The financial change was not saved. Review the proposal and retry.') }
+    finally { confirmingRef.current = false }
+  }
+
   const lotName = resolvedItem ? data.lots.find((lot) => lot.id === resolvedItem.lotId)?.name ?? 'Standalone acquisition' : ''
   const previewValues = command && resolvedItem ? voiceSaleInitial(command, resolvedItem) : undefined
   const closeDialog = () => { recordSpeechEvent('modal_closed');cancelledRef.current = true; clearSpeechTimers();lifecycleRef.current?.cancel(); lifecycleRef.current = null; recognitionRef.current = null; onCloseRef.current() }
@@ -256,7 +289,7 @@ export function VoiceCommandDialog({ data, authenticated, verifySession, onClose
         {speechAvailable ? <button className={`primary voice-mic ${phase === 'listening' ? 'listening' : ''}`} disabled={busy} onClick={phase === 'listening' || phase === 'starting' ? cancelListening : startListening}>{phase === 'starting' ? 'Cancel starting' : phase === 'listening' ? <><Square size={16}/> Stop listening</> : phase === 'interpreting' ? 'Interpreting…' : <><Mic size={17}/> Speak command</>}</button> : <span className="voice-unavailable">This browser does not provide speech transcription. Use the iPhone keyboard microphone in the Command field if available, or type.</span>}
         {(phase === 'starting' || phase === 'listening')&&<span className="listening-indicator" role="status"><i/>{phase === 'starting' ? 'Starting speech service…' : 'Listening for speech'}</span>}
       </div>
-      <label className="voice-command-label">Command<textarea value={text} disabled={phase==='starting'||phase==='listening'||busy} onChange={(event) => { interpretationRef.current++;commandIdRef.current='';setText(event.currentTarget.value);setInterimTranscript('');setFinalTranscript('');setAttempt((value) => value + 1);setAnalysis(null);setSelectedItemId('');setError('');setPhase('ready') }} rows={2} placeholder="Sold VI Music for ten dollars on Vinted."/><small>The command stays in this field. On iPhone, use the keyboard microphone to dictate here whenever Speak command is unavailable.</small></label>
+      <label className="voice-command-label">Command<textarea value={text} disabled={phase==='starting'||phase==='listening'||busy} onChange={(event) => { interpretationRef.current++;commandIdRef.current='';setText(event.currentTarget.value);setInterimTranscript('');setFinalTranscript('');setAttempt((value) => value + 1);setAnalysis(null);setSelectedItemId('');setSelectedFinancialRecordId('');setFinancialAmount('');setError('');setPhase('ready') }} rows={2} placeholder="Sold VI Music for ten dollars on Vinted."/><small>The command stays in this field. On iPhone, use the keyboard microphone to dictate here whenever Speak command is unavailable.</small></label>
       {(interimTranscript || finalTranscript) && <div className="speech-transcript-status" aria-live="polite">{interimTranscript&&<div><span>Interim transcript</span><b>{interimTranscript}</b></div>}{finalTranscript&&<div><span>Final transcript</span><b>{finalTranscript}</b></div>}</div>}
       <details className="speech-diagnostics" open={diagnosticsOpen} onToggle={(event)=>setDiagnosticsOpen(event.currentTarget.open)}>
         <summary>Speech diagnostics</summary>
@@ -264,10 +297,12 @@ export function VoiceCommandDialog({ data, authenticated, verifySession, onClose
         {speechEvents.length>0&&<ul className="speech-diagnostic-events" aria-label="Recent browser speech events">{speechEvents.slice(-12).map((event,index)=><li key={`${event.at}-${event.event}-${index}`}><span>+{(event.at/1000).toFixed(1)}s</span><b>{event.event}</b>{event.code&&<em>{event.code}</em>}</li>)}</ul>}
         <div className="speech-diagnostic-actions"><button type="button" className="secondary" onClick={()=>void copyDiagnostics()}>Copy diagnostics</button><small>{diagnosticsCopied||'Copied report omits transcript, inventory, account details, and tokens. Nothing is transmitted.'}</small></div>
       </details>
-      <div className="voice-interpret-actions"><button className="secondary" disabled={busy || phase === 'starting' || phase === 'listening' || !text.trim()} onClick={() => void interpretTranscript(text)}>{phase === 'processing' || phase === 'interpreting' ? <><LoaderCircle size={16} className="spin"/> Interpreting command…</> : <><Search size={16}/> Interpret command</>}</button><span>{phase === 'error' ? 'Action needed' : phase === 'starting' ? 'Starting recognition' : phase === 'listening' ? 'Listening' : phase === 'transcript_received' ? 'Transcript received' : phase === 'interpreting' || phase === 'processing' ? 'Checking inventory' : analysis?'Review the proposal below':phase==='cancelled'?'Listening cancelled':'Ready'}</span></div>
+      <div className="voice-interpret-actions"><button className="secondary" disabled={busy || phase === 'starting' || phase === 'listening' || !text.trim() || Boolean(analysis)} onClick={() => void interpretTranscript(text)}>{phase === 'processing' || phase === 'interpreting' ? <><LoaderCircle size={16} className="spin"/> Interpreting command…</> : <><Search size={16}/> Interpret command</>}</button><span>{phase === 'error' ? 'Action needed' : phase === 'starting' ? 'Starting recognition' : phase === 'listening' ? 'Listening' : phase === 'transcript_received' ? 'Transcript received' : phase === 'interpreting' || phase === 'processing' ? 'Checking inventory' : analysis?'Review the proposal below':phase==='cancelled'?'Listening cancelled':'Ready'}</span></div>
       {error&&<div className="voice-error" role="alert">{error}</div>}
-      {analysis?.kind === 'read_only'&&<section className="voice-result"><h3>Inventory result</h3><p>{analysis.response}</p>{choices.length>0&&<VoiceItemChoices items={choices} data={data} selectedId={selectedItemId} onChoose={chooseItem}/>}</section>}
+      {analysis?.kind === 'read_only'&&<section className="voice-result"><h3>Inventory result</h3><p>{analysis.response}</p>{choices.length>0&&<VoiceItemChoices items={choices} data={data} selectedId={selectedItemId} openOnly onChoose={(item)=>onOpenLot(item.lotId??'__standalone__')}/>}</section>}
       {analysis?.kind === 'unsupported'&&<div className="voice-error" role="status">{analysis.message}</div>}
+      {analysis?.kind === 'open_lot'&&<section className="voice-result"><h3>Purchase lot</h3><p>{analysis.message}</p><button className="primary" onClick={()=>onOpenLot(analysis.lotId)}>Open {analysis.lotName}</button></section>}
+      {analysis?.kind === 'financial'&&<FinancialVoiceProposal analysis={analysis} amount={financialAmount} setAmount={setFinancialAmount} selectedRecordId={selectedFinancialRecordId} setSelectedRecordId={(id)=>{setSelectedFinancialRecordId(id);const amount=currentFinancialAmount(analysis,id||undefined);setFinancialAmount(amount===undefined?'':(amount/100).toFixed(2))}} received={financialReceived} setReceived={setFinancialReceived} onSubmit={confirmFinancial} busy={busy} data={data}/>}
       {analysis?.kind === 'unmatched'&&<section className="voice-result"><h3>No reliable available match</h3><p>{analysis.message}</p>{choices.length>0&&<VoiceItemChoices items={choices} data={data} selectedId={selectedItemId} onChoose={chooseItem}/>}</section>}
       {analysis?.kind === 'sale'&&<section className="voice-result"><h3>Proposed sale · not saved</h3><div className="voice-proposal"><div><span>Item</span><b>{resolvedItem?.title??analysis.query}</b></div><div><span>Purchase lot</span><b>{lotName||'Select an item'}</b></div><div><span>Platform</span><b>{previewValues?.platform||'Choose before confirming'}</b></div><div><span>Sale amount</span><b>{previewValues?.amountCents===null||previewValues?.amountCents===undefined?'Enter or confirm amount':formatMoney(previewValues.amountCents)}{command!.amountMode==='per_unit'?' each':''}</b></div><div><span>Quantity</span><b>{command!.quantity}</b></div><div><span>Seller fees</span><b>{previewValues?.feeCents===null||previewValues?.feeCents===undefined?'Enter actual fees':formatMoney(previewValues.feeCents)}</b></div><div><span>Seller-paid shipping</span><b>{previewValues?.shippingCents===null||previewValues?.shippingCents===undefined?'Enter amount':formatMoney(previewValues.shippingCents)}</b></div></div>{analysis.ambiguous&&!resolvedItem&&<><p>More than one inventory record matches. Select the exact item before continuing.</p><VoiceItemChoices items={choices} data={data} selectedId={selectedItemId} onChoose={chooseItem}/></>}
         {resolvedItem&&<form ref={formRef} className="form-grid voice-sale-form" onSubmit={confirmSale}>
@@ -281,6 +316,39 @@ export function VoiceCommandDialog({ data, authenticated, verifySession, onClose
   </div>
 }
 
-function VoiceItemChoices({items,data,selectedId,onChoose}:{items:InventoryItem[];data:TrackerData;selectedId:string;onChoose:(item:InventoryItem)=>void}){
-  return <div className="voice-item-choices">{items.map((item)=>{const lot=data.lots.find((entry)=>entry.id===item.lotId);const available=ACTIVE_STATUSES.includes(item.status)&&item.quantity>0;return <button type="button" key={item.id} className={`voice-item-choice ${selectedId===item.id?'selected':''}`} disabled={!available} onClick={()=>onChoose(item)}><span><b>{item.title}</b><small>{lot?.name??'Standalone'} · {item.quantity} available · {item.platform||'No platform set'}{!available?' · unavailable':''}</small></span><strong>{formatMoney(item.costCents)}</strong></button>})}</div>
+function FinancialVoiceProposal({analysis,amount,setAmount,selectedRecordId,setSelectedRecordId,received,setReceived,onSubmit,busy,data}:{analysis:FinancialCommandAnalysis;amount:string;setAmount:(value:string)=>void;selectedRecordId:string;setSelectedRecordId:(id:string)=>void;received:boolean;setReceived:(value:boolean)=>void;onSubmit:(event:React.FormEvent<HTMLFormElement>)=>void;busy:boolean;data:TrackerData}){
+  const {command,matches}=analysis
+  const match=matches.find((entry)=>entry.id===selectedRecordId)??(matches.length===1?matches[0]:undefined)
+  const sale=analysis.sales.find((entry)=>entry.id===selectedRecordId)??(analysis.sales.length===1?analysis.sales[0]:undefined)
+  const lot=data.lots.find((entry)=>entry.id===(command.lotId??match?.lotId))
+  const amountCents=/^\d+(?:\.\d{0,2})?$/.test(amount)?Math.floor(Number(amount.split('.')[0])*100+Number((amount.split('.')[1]??'').padEnd(2,'0'))):undefined
+  const currentAmount=match?(match.paymentStatus==='confirmed'?match.receivedCents:match.expectedCents||match.grossCents):sale?command.expenseField==='feeCents'?sale.feeCents:command.expenseField==='shippingCents'?sale.shippingCents:sale.otherExpenseCents:command.action==='update_lot_expenses'?lot?.expensesCents:undefined
+  const title:Record<FinancialCommand['action'],string>={update_payout_amount:'Update existing payout amount',mark_payout_received:'Confirm payout received',record_payout_received:'Record payout received',issue_store_credit:'Record store credit',record_cash_expense:'Record cash expense',update_lot_expenses:'Correct purchase expenses',update_sale_expense:'Correct sale expense'}
+  let effect=''
+  if(amountCents!==undefined){
+    if(command.action==='issue_store_credit')effect=`Store credit increases by ${formatMoney(amountCents)}. Cash received does not change.`
+    else if(command.action==='record_cash_expense')effect=`Cash position decreases by ${formatMoney(amountCents)}.`
+    else if(command.action==='update_lot_expenses')effect=`Acquisition spending changes by ${formatMoney(amountCents-(lot?.expensesCents??0))}; no sale proceeds are created.`
+    else if(command.action==='update_sale_expense')effect=`Sale expense changes by ${formatMoney(amountCents-(currentAmount??0))}. Confirmed net cash and profit recalculate through the existing sale record.`
+    else if(received){const expected=match?.paymentStatus==='pending'?match.expectedCents:0;effect=`Confirmed cash increases by ${formatMoney(amountCents)}; pending proceeds decrease by ${formatMoney(expected)}.`}
+    else effect=`Pending amount changes by ${formatMoney(amountCents-(currentAmount??0))}. No cash is counted as received.`
+  }
+  const hasUnresolvedAmount=Boolean(command.amountChoicesCents?.length)&&!amount
+  const cannotUpdateMissing=(command.action==='update_payout_amount'&&matches.length===0)||(command.action==='update_sale_expense'&&analysis.sales.length===0)
+  const recordCount=matches.length+analysis.sales.length
+  return <section className="voice-result financial-voice-proposal"><h3>{title[command.action]} · not saved</h3><p>Review the matching record and exact amount. Nothing changes until you confirm.</p>
+    {recordCount>1&&<fieldset className="financial-match-list"><legend>Select the exact existing record</legend>{matches.map((entry)=><label key={entry.id}><input type="radio" name="financial-match" checked={selectedRecordId===entry.id} onChange={()=>setSelectedRecordId(entry.id)}/><span><b>{entry.platform} · {data.lots.find((candidate)=>candidate.id===entry.lotId)?.name??'Unassigned lot'}</b><small>{entry.type.replaceAll('_',' ')} · {entry.paymentStatus} · current {formatMoney(entry.paymentStatus==='confirmed'?entry.receivedCents:entry.expectedCents||entry.grossCents)}</small></span></label>)}{analysis.sales.map((entry)=><label key={entry.id}><input type="radio" name="financial-match" checked={selectedRecordId===entry.id} onChange={()=>setSelectedRecordId(entry.id)}/><span><b>{entry.platform} · {entry.itemIds.map((id)=>data.items.find((item)=>item.id===id)?.title??'Item').join(', ')}</b><small>Sale · {entry.paymentStatus} · current {formatMoney(command.expenseField==='feeCents'?entry.feeCents:command.expenseField==='shippingCents'?entry.shippingCents:entry.otherExpenseCents)}</small></span></label>)}</fieldset>}
+    <div className="voice-proposal"><div><span>Merchant / platform</span><b>{command.merchant??match?.platform??sale?.platform??'Not specified'}</b></div><div><span>Purchase lot</span><b>{lot?.name??(sale?'Associated item lot':'Not identified')}</b></div><div><span>Existing record</span><b>{match?`${match.type.replaceAll('_',' ')} · ${match.paymentStatus}`:sale?`Sale · ${sale.paymentStatus}`:recordCount?'Choose one above':cannotUpdateMissing?'No matching record':'New record · not yet saved'}</b></div>{currentAmount!==undefined&&<div><span>Current amount</span><b>{formatMoney(currentAmount)}{match?.paymentStatus==='confirmed'?' · received':sale?' · currently recorded':' · pending'}</b></div>}<div><span>Proposed amount</span><b>{amountCents===undefined?'Choose or enter an amount':formatMoney(amountCents)}</b></div></div>
+    {command.amountChoicesCents?.length&&<fieldset className="financial-amount-choices"><legend>The spoken digits may mean either amount</legend>{command.amountChoicesCents.map((choice)=><label key={choice}><input type="radio" name="financial-amount-choice" checked={amount===(choice/100).toFixed(2)} onChange={()=>setAmount((choice/100).toFixed(2))}/>{formatMoney(choice)}</label>)}</fieldset>}
+    <form className="financial-confirm-form" onSubmit={onSubmit}><label>Amount<input inputMode="decimal" type="number" min="0" step="0.01" value={amount} onChange={(event)=>setAmount(event.currentTarget.value)} required/></label>
+      {(command.action==='mark_payout_received'||command.action==='update_payout_amount')&&<fieldset><legend>Payment status</legend><label><input type="radio" name="voice-payout-status" checked={!received} onChange={()=>setReceived(false)}/> Still pending · not cash</label><label><input type="radio" name="voice-payout-status" checked={received} onChange={()=>setReceived(true)}/> I received the payment</label></fieldset>}
+      {effect&&<div className="financial-effect"><b>Financial effect</b><span>{effect}</span></div>}
+      {analysis.message&&<p className="voice-error" role="status">{analysis.message}</p>}
+      <div className="voice-sale-actions"><button type="button" className="secondary" onClick={()=>{setAmount('');setSelectedRecordId('')}}>Cancel proposal</button><button className="primary" type="submit" disabled={busy||amountCents===undefined||hasUnresolvedAmount||cannotUpdateMissing||Boolean(recordCount>1&&!selectedRecordId)}>{busy?'Checking sign-in…':'Confirm financial update'}</button></div>
+    </form>
+  </section>
+}
+
+function VoiceItemChoices({items,data,selectedId,onChoose,openOnly=false}:{items:InventoryItem[];data:TrackerData;selectedId:string;onChoose:(item:InventoryItem)=>void;openOnly?:boolean}){
+  return <div className="voice-item-choices">{items.map((item)=>{const lot=data.lots.find((entry)=>entry.id===item.lotId);const available=ACTIVE_STATUSES.includes(item.status)&&item.quantity>0;return <button type="button" key={item.id} className={`voice-item-choice ${selectedId===item.id?'selected':''}`} disabled={!available&&!openOnly} onClick={()=>onChoose(item)}><span><b>{item.title}</b><small>{lot?.name??'Standalone'} · {item.quantity} available · {item.platform||'No platform set'}{!available?' · unavailable':''} {openOnly?'· Open lot':''}</small></span><strong>{formatMoney(item.costCents)}</strong></button>})}</div>
 }

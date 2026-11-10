@@ -1,5 +1,6 @@
 import { ACTIVE_STATUSES, formatMoney, getMetrics, isFieldConfirmed, lineNetProceedsCents, PLATFORMS, retainedCostCents, type InventoryItem, type TrackerData } from './domain'
 import { summarizeLot } from './lotView'
+import { analyzeFinancialCommand, type FinancialCommandAnalysis } from './financialVoiceCommand'
 
 export interface ParsedSaleCommand {
   intent: 'record_sale'
@@ -18,6 +19,8 @@ export interface ParsedSaleCommand {
 export type VoiceAnalysis =
   | { kind: 'sale'; command: ParsedSaleCommand; matches: InventoryItem[]; matched: InventoryItem | null; ambiguous: boolean; query: string }
   | { kind: 'read_only'; response: string; matches: InventoryItem[] }
+  | FinancialCommandAnalysis
+  | { kind: 'open_lot'; lotId: string; lotName: string; message: string }
   | { kind: 'unmatched'; query: string; suggestions: InventoryItem[]; message: string }
   | { kind: 'unsupported'; message: string }
 
@@ -202,6 +205,17 @@ function countQuestion(text: string, data: TrackerData): VoiceAnalysis | null {
 
 function readOnlyQuery(text: string, data: TrackerData): VoiceAnalysis | null {
   const metrics = getMetrics(data)
+  if (/\b(?:open|show|go to)\b/i.test(text) && /\b(?:lot|haul|purchase)\b/i.test(text)) {
+    const query = text.replace(/^.*?\b(?:open|show|go to)\s+/i, '').replace(/\b(?:my|the|purchase|lot|haul)\b/gi, ' ').replace(/[?.!,]/g, ' ').replace(/\s+/g, ' ').trim()
+    const lot = data.lots.map((candidate) => ({ lot: candidate, score: matchScore(query, { id: candidate.id, title: candidate.name } as InventoryItem) })).sort((a,b)=>b.score-a.score).find((entry)=>entry.score>=0.55)?.lot
+    return lot ? { kind:'open_lot', lotId:lot.id, lotName:lot.name, message:`Opening ${lot.name}.` } : { kind:'read_only', response:`I could not find a purchase lot matching “${query}”.`, matches:[] }
+  }
+  if (/\b(?:pending payouts?|pending payments?|outstanding offers?)\b/i.test(text)) {
+    const pending = (data.ledgerTransactions ?? []).filter((entry) => ['pending_offer','cash_sale','buyback_payout'].includes(entry.type) && entry.paymentStatus !== 'confirmed' && entry.expectedCents > 0)
+    const lines = pending.map((entry) => `${entry.platform ?? 'Unknown merchant'} · ${data.lots.find((lot)=>lot.id===entry.lotId)?.name ?? 'Unassigned lot'} · ${formatMoney(entry.expectedCents)}`)
+    return { kind:'read_only', response: lines.length ? `Pending proceeds: ${formatMoney(pending.reduce((sum,entry)=>sum+entry.expectedCents,0))}. ${lines.join('; ')}. Not received cash.` : 'No pending payouts or offers.', matches:[] }
+  }
+  if (/\bstore\s+credit\b/i.test(text) && /\b(?:how much|what|balance|earned|have)\b/i.test(text)) return { kind:'read_only', response:`Store credit balance: ${formatMoney(metrics.storeCreditBalanceCents)}. This is separate from cash received.`, matches:[] }
   const count = countQuestion(text, data)
   if (count) return count
   if (/\b(?:how much|what).*(?:recovered|cash|profit|investment)\b/i.test(text)) {
@@ -228,6 +242,8 @@ export function analyzeVoiceCommand(text: string, data: TrackerData, commandId: 
   if (!input) return { kind: 'unsupported', message: 'Type or say a command first.' }
   const query = readOnlyQuery(input, data)
   if (query) return query
+  const financial = analyzeFinancialCommand(input, data, commandId)
+  if (financial) return financial
   const command = parseSale(input, data.platforms, commandId)
   if (!command) return { kind: 'unsupported', message: 'Supported commands are sales, inventory search, available-item counts, and purchase-lot cash reports.' }
   if (!command.itemQuery) return { kind: 'unsupported', message: 'I could not identify the item title. Try “Sold [item title] for [amount] on [platform].”' }
