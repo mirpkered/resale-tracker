@@ -16,6 +16,7 @@ import { VoiceCommandDialog } from './VoiceCommandDialog'
 import { FinancialDetail, type DashboardDetailKind } from './FinancialDetail'
 import { applyFinancialCommand, type FinancialCommand } from '../financialVoiceCommand'
 import { parseAppRoute, routeHash } from '../navigation'
+import { archiveEligibility, archiveInventoryItem, deleteInventoryItem, deletionEligibility, restoreInventoryItem } from '../itemLifecycle'
 
 type Section = typeof PRIMARY_NAVIGATION[number]
 type SettingsView = 'home' | 'reports' | 'data' | 'transactions'
@@ -65,6 +66,21 @@ export default function App() {
 
   const metrics = useMemo(() => getMetrics(data), [data])
   const persist = (next: TrackerData) => { const event={id:crypto.randomUUID(),at:new Date().toISOString(),action:'local_edit',summary:'Saved a local inventory, purchase, listing, sale, or expense change.'};next={...next,auditEvents:[...(data.auditEvents??[]),event].slice(-500)};setData(next); const updated=withLocalData(workspace,next);setWorkspace(updated) }
+  const archiveItem = (item:InventoryItem) => {
+    const eligibility=archiveEligibility(item)
+    if(!eligibility.allowed){setNotice(eligibility.reasons.join(' '));return}
+    const lotName=data.lots.find((lot)=>lot.id===item.lotId)?.name??'Standalone acquisitions'
+    if(!window.confirm(`Archive “${item.title}” from “${lotName}”? It will be hidden from regular inventory. Costs, quantities, listings, sales, and disposition history will be preserved.`))return
+    persist(archiveInventoryItem(data,item.id));setSelectedItemId(null);setNotice('Item archived. Its records and financial history were preserved. Use Show archived items to restore it.')
+  }
+  const restoreItem = (item:InventoryItem) => {persist(restoreInventoryItem(data,item.id));setSelectedItemId(null);setNotice('Item restored to normal inventory. Its history and identifiers are unchanged.')}
+  const permanentlyDeleteItem = (item:InventoryItem) => {
+    const eligibility=deletionEligibility(data,item.id)
+    if(!eligibility.allowed){setNotice(`Deletion blocked. ${eligibility.reasons.join(' ')}`);return}
+    const lotName=data.lots.find((lot)=>lot.id===item.lotId)?.name??'Standalone acquisitions'
+    if(!window.confirm(`Permanently delete “${item.title}” from “${lotName}”? This item has no recorded quantity, acquisition cost, unit history, listing link, or financial references. This cannot be undone.`))return
+    persist(deleteInventoryItem(data,item.id));setSelectedItemId(null);setNotice('The unlinked erroneous inventory record was permanently deleted.')
+  }
   const resolvePlatform = (name:string) => {
     const existing=data.platforms.find((platform)=>platform.name.toLowerCase()===name.trim().toLowerCase())
     if(existing)return existing
@@ -213,7 +229,7 @@ export default function App() {
       {section==='Lots'&&!selectedLot&&!selectedLotId&&!selectedItem&&!standaloneSelected&&<LotsOverview data={data} onOpenLot={navigateToLot} onEditLot={(lot)=>{setEditingLot(lot);openSection('Settings');setSettingsView('data');setModal('lot')}}/>}
       {section==='Lots'&&selectedLotId&&!selectedLot&&!standaloneSelected&&!selectedItem&&<section className="panel missing-lot"><h2>Purchase lot unavailable</h2><p>This lot ID is not in the current synchronized inventory. No other lot was opened.</p><button className="secondary" onClick={()=>openSection('Lots')}><ArrowLeft size={16}/> Back to Lots</button></section>}
       {section==='Lots'&&(selectedLot||standaloneSelected)&&!selectedItem&&<LotInventory data={data} lot={selectedLot??null} onBack={()=>openSection('Lots')} onOpenItem={(item)=>setSelectedItemId(item.id)} onAddItem={()=>{setEditingItem(null);setModal('item')}} onEditLot={()=>{if(!selectedLot)return;setEditingLot(selectedLot);openSection('Settings');setSettingsView('data');setModal('lot')}}/>}
-      {section==='Lots'&&selectedItem&&<ItemDetails data={data} item={selectedItem} onBack={()=>setSelectedItemId(null)} onEdit={()=>{setEditingItem(selectedItem);setModal('item')}} onMarkSold={()=>{setQuickSaleItemId(selectedItem.id);setModal('quickSale')}}/>}
+      {section==='Lots'&&selectedItem&&<ItemDetails data={data} item={selectedItem} onBack={()=>setSelectedItemId(null)} onEdit={()=>{setEditingItem(selectedItem);setModal('item')}} onMarkSold={()=>{setQuickSaleItemId(selectedItem.id);setModal('quickSale')}} onArchive={()=>archiveItem(selectedItem)} onRestore={()=>restoreItem(selectedItem)} onDelete={()=>permanentlyDeleteItem(selectedItem)}/>}
       {section==='Settings'&&settingsView==='home'&&<SettingsHome metrics={metrics} onOpen={setSettingsView} dark={dark} onToggleTheme={()=>setDark(!dark)} account={cloud.session?.login??'Offline inventory'} onSignOut={()=>void cloud.signOut()}/>}
       {section==='Settings'&&settingsView==='reports'&&<><Reports data={data} metrics={metrics} onExport={exportCsv}/><PurchaseGroupReport data={data}/><MigrationFinancialSummary metrics={metrics}/><AuditHistory data={data}/></>}
       {section==='Settings'&&settingsView==='transactions'&&<><Sales data={data} onPaid={markPaid} onEdit={updateSale} onReturn={(sale)=>{setReturningSale(sale);setModal('return')}} onExpense={()=>setModal('expense')} onAdd={()=>setModal('sale')}/><LedgerTransactions data={data} onEdit={updateLedgerTransaction}/></>}

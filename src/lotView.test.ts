@@ -58,7 +58,7 @@ describe('lot-first inventory view', () => {
     expect(data.units?.filter((unit) => ['item-a', 'item-c'].includes(unit.itemId))).toHaveLength(2)
   })
 
-  it('sorts listed, other available, sold, then disposed with stable order and no source mutation', () => {
+  it('sorts listed, other available, sold, then disposed with title and ID order without mutating source', () => {
     const data = sampleInventory()
     const source = [
       { ...data.items[1], status: 'disposed' as const },
@@ -85,6 +85,21 @@ describe('lot-first inventory view', () => {
     expect(sortLotInventoryItems(items).map((item) => item.id)).toEqual(['second', 'first'])
     items[1].status = 'disposed'
     expect(sortLotInventoryItems(items).map((item) => item.id)).toEqual(['first', 'second'])
+  })
+
+  it('sorts alphabetically within each group and uses stable IDs for equal titles',()=>{
+    const base=sampleInventory().items[0]
+    const source:InventoryItem[]=[
+      {...base,id:'z',title:'Zebra',status:'active',platform:'Vinted'},
+      {...base,id:'disposed-z',title:'Zebra disposed',status:'disposed',quantity:0},
+      {...base,id:'listed-b',title:'Alpha',status:'active',platform:'Vinted'},
+      {...base,id:'listed-a',title:'Alpha',status:'active',platform:'eBay'},
+      {...base,id:'unlisted',title:'Beta',status:'acquired'},
+      {...base,id:'sold',title:'Aardvark sold',status:'completed',quantity:0},
+      {...base,id:'partial',title:'Zulu partial',status:'completed',quantity:1,originalQuantity:2},
+    ]
+    expect(sortLotInventoryItems(source).map((item)=>item.id)).toEqual(['listed-a','listed-b','z','unlisted','partial','sold','disposed-z'])
+    expect(source.map((item)=>item.id)[0]).toBe('z')
   })
 
   it('does not subtract estimated acquisition cost from a cash position', () => {

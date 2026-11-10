@@ -14,7 +14,7 @@ describe('responsive lot-first layout', () => {
     expect(css).toContain('overflow-wrap:anywhere')
     expect(css).toContain('@media(max-width:760px)')
     expect(lotUi).toContain('className="lot-card panel"')
-    expect(lotUi).toContain('className="lot-item-card panel"')
+    expect(lotUi).toContain('lot-item-card panel ${item.archived?\'archived-item\':\'\'}')
     expect(lotUi).toContain('Historical ask · unconfirmed')
   })
 
