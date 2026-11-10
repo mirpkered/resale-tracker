@@ -1,6 +1,6 @@
 import { ACTIVE_STATUSES, allocateCents, isFieldConfirmed, lineNetProceedsCents, lotUnallocatedCents, receivedCashCents, retainedCostCents, type InventoryItem, type LedgerTransaction, type PurchaseLot, type Sale, type TrackerData } from './domain'
 
-export const PRIMARY_NAVIGATION = ['Dashboard', 'Lots', 'Settings'] as const
+export const PRIMARY_NAVIGATION = ['Dashboard', 'Lots', 'Listings', 'Settings'] as const
 
 /** Flags reconciliation caveats already recorded in lot metadata, without changing records. */
 export function lotReconciliationStatus(data: TrackerData, lot: PurchaseLot) {
@@ -13,15 +13,18 @@ export function lotReconciliationStatus(data: TrackerData, lot: PurchaseLot) {
 const SOLD_STATUSES = new Set(['awaiting_payment', 'awaiting_fulfillment', 'completed'])
 const END_STATUSES = new Set(['retained', 'traded', 'donated'])
 
+export type InventoryStatusGroup = 'listed' | 'unlisted' | 'sold' | 'disposed'
+export function inventoryStatusGroup(item: InventoryItem): InventoryStatusGroup {
+  if (item.status === 'disposed' || END_STATUSES.has(item.status)) return 'disposed'
+  if (item.quantity > 0) return item.status === 'active' && item.platform.trim() ? 'listed' : 'unlisted'
+  if (SOLD_STATUSES.has(item.status)) return 'sold'
+  return 'sold'
+}
+
 /** Presentation-only ordering: available units stay with their available item, regardless of sold-copy history. */
 export function sortLotInventoryItems(items: InventoryItem[]): InventoryItem[] {
-  const group = (item: InventoryItem) => {
-    if (item.status === 'disposed' || END_STATUSES.has(item.status)) return 3
-    if (item.quantity > 0) return item.status === 'active' && item.platform.trim() ? 0 : 1
-    if (SOLD_STATUSES.has(item.status)) return 2
-    return 2
-  }
-  return [...items].sort((a, b) => group(a) - group(b) || a.title.localeCompare(b.title, 'en', { sensitivity: 'base', numeric: true }) || a.id.localeCompare(b.id))
+  const order: Record<InventoryStatusGroup, number> = { listed: 0, unlisted: 1, sold: 2, disposed: 3 }
+  return [...items].sort((a, b) => order[inventoryStatusGroup(a)] - order[inventoryStatusGroup(b)] || a.title.localeCompare(b.title, 'en', { sensitivity: 'base', numeric: true }) || a.id.localeCompare(b.id))
 }
 
 export interface LotSummary {

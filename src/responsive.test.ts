@@ -60,15 +60,20 @@ describe('responsive lot-first layout', () => {
     expect(voiceUi).not.toContain('}, [onClose])')
     expect(voiceUi).toContain('onCloseRef.current = onClose')
     expect(voiceUi).toContain('use the microphone on the iPhone keyboard to dictate')
-    expect(voiceUi).toContain('void interpretTranscript(transcript)')
+    expect(voiceUi).toContain('void interpretTranscript(value)')
+    expect(voiceUi).toContain('createSpeechCommandSession()')
+    expect(voiceUi).toContain('finalizeCompletedTranscript(transcript)')
+    expect(voiceUi).toContain('speechSession.complete()')
+    expect(voiceUi).toContain('activeSpeechSessionRef.current !== speechSession')
     expect(voiceUi).toContain('Confirm Sale')
   })
 
-  it('has three primary destinations and keeps migrations under settings data management', () => {
+  it('has four primary destinations and keeps migrations under settings data management', () => {
     expect(appUi).toContain("type Section = typeof PRIMARY_NAVIGATION[number]")
     expect(appUi).toContain("settingsView==='data'")
     expect(appUi).toContain('<MigrationReconciliation')
     expect(appUi).not.toContain("{ name: 'Inventory'")
     expect(appUi).not.toContain("{ name: 'Import'")
+    expect(appUi).toContain("{ name: 'Listings', icon: Tag }")
   })
 })

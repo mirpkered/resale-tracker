@@ -18,8 +18,8 @@ const sampleInventory = (): TrackerData => {
 }
 
 describe('lot-first inventory view', () => {
-  it('uses only Dashboard, Lots, and Settings as primary navigation', () => {
-    expect(PRIMARY_NAVIGATION).toEqual(['Dashboard', 'Lots', 'Settings'])
+  it('uses Dashboard, Lots, Listings, and Settings as primary navigation', () => {
+    expect(PRIMARY_NAVIGATION).toEqual(['Dashboard', 'Lots', 'Listings', 'Settings'])
   })
 
   it('summarizes lot unit counts and confirmed net cash', () => {

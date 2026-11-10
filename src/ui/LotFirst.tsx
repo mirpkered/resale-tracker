@@ -1,4 +1,4 @@
-import { ArrowLeft, ChevronRight, CircleDollarSign, Moon, Package, Pencil, Plus, ShoppingBag, Sun, WalletCards, Archive, RotateCcw, Trash2 } from 'lucide-react'
+import { ArrowLeft, ArrowUpRight, ChevronRight, CircleDollarSign, Moon, Package, Pencil, Plus, ShoppingBag, Sun, WalletCards, Archive, RotateCcw, Trash2 } from 'lucide-react'
 import { useState } from 'react'
 import { ACTIVE_STATUSES, formatMoney, getMetrics, isFieldConfirmed, STATUS_LABELS, type InventoryItem, type PurchaseLot, type TrackerData } from '../domain'
 import { itemSales, lotReconciliationStatus, sortLotInventoryItems, summarizeLot } from '../lotView'
@@ -54,7 +54,7 @@ export function LotInventory({ data, lot, onBack, onOpenItem, onAddItem, onEditL
   </section>
 }
 
-export function ItemDetails({ data, item, onBack, onEdit, onMarkSold, onArchive, onRestore, onDelete }: { data: TrackerData; item: InventoryItem; onBack: () => void; onEdit: () => void; onMarkSold: () => void; onArchive: () => void; onRestore: () => void; onDelete: () => void }) {
+export function ItemDetails({ data, item, onBack, onEdit, onMarkSold, onArchive, onRestore, onDelete, onOpenLot, backLabel }: { data: TrackerData; item: InventoryItem; onBack: () => void; onEdit: () => void; onMarkSold: () => void; onArchive: () => void; onRestore: () => void; onDelete: () => void; onOpenLot?: (lotId: string) => void; backLabel?: string }) {
   const lot = data.lots.find((entry) => entry.id === item.lotId)
   const sales = itemSales(data, item)
   const soldQuantity = sales.reduce((sum, entry) => sum + entry.quantity, 0)
@@ -62,7 +62,7 @@ export function ItemDetails({ data, item, onBack, onEdit, onMarkSold, onArchive,
   const archiveDecision = archiveEligibility(item)
   const deletion = deletionEligibility(data, item.id)
   return <section className="item-detail-view">
-    <button className="back-link" onClick={onBack}><ArrowLeft size={17}/> {lot?.name ?? 'Lots'}</button>
+    <button className="back-link" onClick={onBack}><ArrowLeft size={17}/> {backLabel ?? lot?.name ?? 'Lots'}</button>
     <article className="item-detail-card panel">
       {item.image && <img className="item-detail-image" src={item.image} alt=""/>}
       <div className="eyebrow">{lot ? `${lot.name} · ${lot.date}` : 'Standalone acquisition'}</div>
@@ -71,6 +71,7 @@ export function ItemDetails({ data, item, onBack, onEdit, onMarkSold, onArchive,
       <div className="item-detail-status"><span className={`item-status status-${item.status}`}>{STATUS_LABELS[item.status]}</span><span>{item.quantity} available · {soldQuantity} sold</span></div>
       <div className="item-detail-financials"><div><span>Category</span><b>{item.category}</b></div><div><span>Allocated cost</span><b>{formatMoney(item.costCents)}</b></div><div><span>Current asking price</span><b>{item.askingCents ? formatMoney(item.askingCents) : 'Not set'}</b></div>{item.minimumOfferCents!==undefined&&<div><span>Minimum acceptable offer</span><b>{formatMoney(item.minimumOfferCents)}</b></div>}{Boolean(item.suggestedAskingCents)&&<div><span>Historical ask · unconfirmed</span><b>{formatMoney(item.suggestedAskingCents??0)}</b></div>}<div><span>Listing platform</span><b>{item.status === 'active' && item.platform.trim() ? `Listed on ${item.platform}` : item.platform || 'Not listed'}</b></div><div><span>Actual sale price</span><b>{sales.length ? sales.some((entry) => !entry.proceedsAllocated) ? 'Part of a combined sale · item share unknown' : formatMoney(sales.reduce((sum, entry) => sum + entry.grossCents, 0)) : 'No sale recorded'}</b></div></div>
       {item.url && <a className="item-listing-link" href={item.url} target="_blank" rel="noreferrer">Open listing</a>}
+      {onOpenLot && <button className="listing-lot-link item-detail-lot-link" type="button" onClick={() => onOpenLot(item.lotId ?? '__standalone__')}>Open purchase lot <ArrowUpRight size={14}/></button>}
       {item.notes && <div className="item-notes"><b>Notes</b><p>{item.notes}</p></div>}
       {sales.length > 0 && <section className="item-sale-history"><h3>Sale history</h3>{sales.map(({ sale, grossCents, quantity, proceedsAllocated }) => <div className="item-sale-row" key={sale.id}><div><b>{proceedsAllocated ? formatMoney(grossCents) : `Combined sale total ${formatMoney(grossCents)} · ${sale.platform}`}</b><span>{sale.date||'Date unknown'} · {quantity} unit{quantity === 1 ? '' : 's'} · {sale.paymentStatus === 'paid' ? 'Cash received' : sale.paymentStatus === 'unpaid' ? 'Awaiting payment' : sale.paymentStatus}{proceedsAllocated ? '' : ' · item proceeds not allocated'}</span></div><span>{proceedsAllocated ? sale.feeCents + sale.shippingCents + sale.otherExpenseCents > 0 ? `${formatMoney(sale.feeCents + sale.shippingCents + sale.otherExpenseCents)} expenses` : 'No selling expenses' : 'Bundle expenses not itemized'}</span></div>)}</section>}
       <div className="item-detail-actions">{available && <button className="primary mark-sold-button" onClick={onMarkSold}><CircleDollarSign size={19}/> Mark Sold</button>}<p>Asking prices are not sale revenue. Sales count as cash only after payment is confirmed.</p><div className="item-lifecycle-actions">{item.archived?<button className="secondary" onClick={onRestore}><RotateCcw size={16}/> Restore to inventory</button>:<button className="secondary" disabled={!archiveDecision.allowed} title={archiveDecision.allowed?'Hide this item from regular inventory':'Resolve available quantity or active listing before archiving'} onClick={onArchive}><Archive size={16}/> Archive item</button>}<button className="danger-secondary" disabled={!deletion.allowed} title={deletion.allowed?'Permanently delete this empty erroneous record':'Deletion blocked because this item has inventory or history'} onClick={onDelete}><Trash2 size={16}/> Permanently delete</button></div>{!deletion.allowed&&<small className="deletion-block-reasons">Deletion is unavailable: {deletion.reasons.join(' ')}</small>}{!item.archived&&!archiveDecision.allowed&&<small className="archive-block-reason">{archiveDecision.reasons.join(' ')}</small>}</div>

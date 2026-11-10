@@ -12,4 +12,10 @@ describe('stable lot navigation routes',()=>{
     expect(parseAppRoute('#lots')).toEqual({section:'Lots'})
     expect(parseAppRoute('')).toEqual({section:'Dashboard'})
   })
+  it('preserves a selected global-listing item route for refresh and history',()=>{
+    const hash=routeHash({section:'Listings',itemId:'item / one'})
+    expect(hash).toBe('#listings/item/item%20%2F%20one')
+    expect(parseAppRoute(hash)).toEqual({section:'Listings',itemId:'item / one'})
+    expect(parseAppRoute('#listings')).toEqual({section:'Listings'})
+  })
 })

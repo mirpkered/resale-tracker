@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Activity, Archive, ArrowDownToLine, ArrowLeft, ArrowUpRight, Check, CircleHelp, ClipboardCheck, ClipboardList, Coins, FilePlus2, Home, Layers3, Mic, Moon, Plus, Search, Settings2, ShoppingBag, Sun, Upload, WalletCards, X } from 'lucide-react'
+import { Activity, Archive, ArrowDownToLine, ArrowLeft, ArrowUpRight, Check, CircleHelp, ClipboardCheck, ClipboardList, Coins, FilePlus2, Home, Layers3, Mic, Moon, Plus, Search, Settings2, ShoppingBag, Sun, Tag, Upload, WalletCards, X } from 'lucide-react'
 import type { CashExpense, InventoryItem, ItemStatus, LedgerTransaction, PurchaseLot, Sale, TrackerData } from '../domain'
 import { ACTIVE_STATUSES, allocateCents, dollarsToCents, formatMoney, getMetrics, importPreview, isFieldConfirmed, parseImportText, purchaseGroupTotals, receivedCashCents, retainedCostCents, saleNetCents, STATUS_LABELS, transitionStatus } from '../domain'
 import { discardLocalAndLoadRemote, exportLocalBackup, exportPendingBatch, hasExplicitlySignedOut, isWorkspaceDirty, loadWorkspace, parseLocalBackup, receiveRemoteDocument, saveWorkspace, withLocalData, type LocalWorkspace } from '../storage'
@@ -11,6 +11,7 @@ import { canActivateAppUpdate } from '../pwaUpdate'
 import { correctExistingSale, recordQuickSale } from '../quickSale'
 import { PRIMARY_NAVIGATION, realizedLotProfitCents, summarizeLot } from '../lotView'
 import { ItemDetails, LotInventory, LotsOverview, SettingsHome } from './LotFirst'
+import { ListingsView } from './ListingsView'
 import { QuickSaleFields } from './QuickSaleFields'
 import { VoiceCommandDialog } from './VoiceCommandDialog'
 import { FinancialDetail, type DashboardDetailKind } from './FinancialDetail'
@@ -21,7 +22,7 @@ import { archiveEligibility, archiveInventoryItem, deleteInventoryItem, deletion
 type Section = typeof PRIMARY_NAVIGATION[number]
 type SettingsView = 'home' | 'reports' | 'data' | 'transactions'
 const nav: { name: Section; icon: typeof Home }[] = [
-  { name: 'Dashboard', icon: Home }, { name: 'Lots', icon: Layers3 }, { name: 'Settings', icon: Settings2 },
+  { name: 'Dashboard', icon: Home }, { name: 'Lots', icon: Layers3 }, { name: 'Listings', icon: Tag }, { name: 'Settings', icon: Settings2 },
 ]
 const today = new Date().toISOString().slice(0, 10)
 export default function App() {
@@ -29,7 +30,7 @@ export default function App() {
   const [settingsView, setSettingsView] = useState<SettingsView>('home')
   const [selectedLotId, setSelectedLotId] = useState<string | null>(() => parseAppRoute(window.location.hash).lotId ?? null)
   const [dashboardDetail, setDashboardDetail] = useState<DashboardDetailKind | null>(null)
-  const [selectedItemId, setSelectedItemId] = useState<string | null>(null)
+  const [selectedItemId, setSelectedItemId] = useState<string | null>(() => parseAppRoute(window.location.hash).itemId ?? null)
   const [workspace, setWorkspace] = useState<LocalWorkspace>(() => loadWorkspace())
   const [data, setData] = useState<TrackerData>(() => loadWorkspace().data)
   const [syncNotice, setSyncNotice] = useState('')
@@ -54,7 +55,7 @@ export default function App() {
   useEffect(() => { document.documentElement.dataset.theme = dark ? 'dark' : 'light'; localStorage.setItem('resale-dark', dark ? '1' : '0') }, [dark])
   useEffect(() => { if (notice) { const timer = setTimeout(() => setNotice(''), 4300); return () => clearTimeout(timer) } }, [notice])
   useEffect(() => { const update = () => setOnline(navigator.onLine); window.addEventListener('online', update); window.addEventListener('offline', update); return () => { window.removeEventListener('online', update); window.removeEventListener('offline', update) } }, [])
-  useEffect(() => { const onPopState=()=>{const route=parseAppRoute(window.location.hash);setSection(route.section);setSelectedLotId(route.lotId??null);setSelectedItemId(null);setDashboardDetail(null)};window.addEventListener('popstate',onPopState);return()=>window.removeEventListener('popstate',onPopState) },[])
+  useEffect(() => { const onPopState=()=>{const route=parseAppRoute(window.location.hash);setSection(route.section);setSelectedLotId(route.lotId??null);setSelectedItemId(route.itemId??null);setDashboardDetail(null)};window.addEventListener('popstate',onPopState);return()=>window.removeEventListener('popstate',onPopState) },[])
 
   const cloud = useCloudSync(workspace,setWorkspace,setData,online)
   useEffect(() => {
@@ -207,9 +208,10 @@ export default function App() {
   const selectedItem = data.items.find((item) => item.id === selectedItemId)
   const quickSaleItem = data.items.find((item) => item.id === quickSaleItemId)
   const standaloneSelected = selectedLotId === '__standalone__'
-  const contentTitle = section === 'Lots' ? selectedItem?.title ?? selectedLot?.name ?? (selectedLotId&&!standaloneSelected?'Purchase lot unavailable':standaloneSelected ? 'Standalone acquisitions' : 'Lots') : section === 'Settings' ? settingsView === 'home' ? 'Settings' : settingsView === 'reports' ? 'Financial reports' : settingsView === 'transactions' ? 'Transactions & expenses' : 'Data management' : dashboardDetail ? ({investment:'Purchase investment',cash_received:'Cash received',cash_position:'Cash position',pending:'Pending proceeds'} as const)[dashboardDetail] : 'Dashboard'
+  const contentTitle = section === 'Lots' ? selectedItem?.title ?? selectedLot?.name ?? (selectedLotId&&!standaloneSelected?'Purchase lot unavailable':standaloneSelected ? 'Standalone acquisitions' : 'Lots') : section === 'Listings' ? selectedItem?.title ?? 'Listings' : section === 'Settings' ? settingsView === 'home' ? 'Settings' : settingsView === 'reports' ? 'Financial reports' : settingsView === 'transactions' ? 'Transactions & expenses' : 'Data management' : dashboardDetail ? ({investment:'Purchase investment',cash_received:'Cash received',cash_position:'Cash position',pending:'Pending proceeds'} as const)[dashboardDetail] : 'Dashboard'
   const openSection = (name: Section) => { setSection(name); setSelectedLotId(null); setSelectedItemId(null);setDashboardDetail(null);window.history.pushState({resaleTracker:true},'',routeHash({section:name})) }
   const navigateToLot = (id:string) => { if(id==='__lots__'){openSection('Lots');return} setSection('Lots');setSelectedLotId(id);setSelectedItemId(null);setDashboardDetail(null);window.history.pushState({resaleTracker:true},'',routeHash({section:'Lots',lotId:id})) }
+  const openListingItem = (item:InventoryItem) => { setSection('Listings');setSelectedLotId(null);setSelectedItemId(item.id);setDashboardDetail(null);window.history.pushState({resaleTracker:true},'',routeHash({section:'Listings',itemId:item.id})) }
   const confirmFinancialVoiceCommand = async(command:FinancialCommand,recordId:string|undefined,amountCents:number,expectedRecord:LedgerTransaction|Sale|undefined,markReceived:boolean) => {
     await cloud.verifySession()
     if(expectedRecord){const current='type' in expectedRecord?(data.ledgerTransactions??[]).find((entry)=>entry.id===recordId):data.sales.find((entry)=>entry.id===recordId);if(!current||JSON.stringify(current)!==JSON.stringify(expectedRecord))throw new Error('This financial record changed after the proposal. Review the latest cloud data before trying again.')}
@@ -226,6 +228,8 @@ export default function App() {
       {notice&&<div className="toast"><Check size={17}/>{notice}<button onClick={()=>setNotice('')}><X size={15}/></button></div>}
       {section==='Dashboard'&&!dashboardDetail&&<Dashboard data={data} metrics={metrics} onOpenLot={navigateToLot} onOpenDetail={setDashboardDetail} onOpenTransactions={()=>{openSection('Settings');setSettingsView('transactions')}}/>}
       {section==='Dashboard'&&dashboardDetail&&<FinancialDetail kind={dashboardDetail} data={data} onBack={()=>setDashboardDetail(null)} onOpenLot={navigateToLot} onOpenTransactions={()=>{openSection('Settings');setSettingsView('transactions')}}/>}
+      {section==='Listings'&&<ListingsView data={data} onOpenItem={openListingItem} onOpenLot={navigateToLot} onEditItem={(item)=>{setEditingItem(item);setModal('item')}} hidden={Boolean(selectedItem)}/>}
+      {section==='Listings'&&selectedItem&&<ItemDetails data={data} item={selectedItem} onBack={()=>openSection('Listings')} backLabel="Back to Listings" onOpenLot={navigateToLot} onEdit={()=>{setEditingItem(selectedItem);setModal('item')}} onMarkSold={()=>{setQuickSaleItemId(selectedItem.id);setModal('quickSale')}} onArchive={()=>archiveItem(selectedItem)} onRestore={()=>restoreItem(selectedItem)} onDelete={()=>permanentlyDeleteItem(selectedItem)}/>}
       {section==='Lots'&&!selectedLot&&!selectedLotId&&!selectedItem&&!standaloneSelected&&<LotsOverview data={data} onOpenLot={navigateToLot} onEditLot={(lot)=>{setEditingLot(lot);openSection('Settings');setSettingsView('data');setModal('lot')}}/>}
       {section==='Lots'&&selectedLotId&&!selectedLot&&!standaloneSelected&&!selectedItem&&<section className="panel missing-lot"><h2>Purchase lot unavailable</h2><p>This lot ID is not in the current synchronized inventory. No other lot was opened.</p><button className="secondary" onClick={()=>openSection('Lots')}><ArrowLeft size={16}/> Back to Lots</button></section>}
       {section==='Lots'&&(selectedLot||standaloneSelected)&&!selectedItem&&<LotInventory data={data} lot={selectedLot??null} onBack={()=>openSection('Lots')} onOpenItem={(item)=>setSelectedItemId(item.id)} onAddItem={()=>{setEditingItem(null);setModal('item')}} onEditLot={()=>{if(!selectedLot)return;setEditingLot(selectedLot);openSection('Settings');setSettingsView('data');setModal('lot')}}/>}

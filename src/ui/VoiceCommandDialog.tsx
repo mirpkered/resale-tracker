@@ -7,7 +7,7 @@ import type { QuickSaleInitial } from '../quickSaleForm'
 import { voiceSaleInitial } from '../quickSaleForm'
 import { canProcessVoiceCommand, interpretVoiceTranscript, verifyVoiceCommandSession, type VoiceAnalysis } from '../voiceCommand'
 import type { QuickSaleInput } from '../quickSale'
-import { attachSpeechLifecycle, browserSpeechRecognitionAvailable, createOnceGate, SpeechTranscriptBuffer, type SpeechRecognizer, type SpeechWindow } from '../speechRecognition'
+import { attachSpeechLifecycle, browserSpeechRecognitionAvailable, createSpeechCommandSession, type SpeechRecognizer, type SpeechWindow } from '../speechRecognition'
 import { formatSpeechDiagnosticReport, type SpeechDiagnosticEvent } from '../speechDiagnostics'
 import { currentFinancialAmount, type FinancialCommandAnalysis, type FinancialCommand } from '../financialVoiceCommand'
 export function VoiceCommandDialog({ data, authenticated, verifySession, onClose, onConfirmSale, onConfirmFinancial, onOpenLot }: {
@@ -43,8 +43,7 @@ export function VoiceCommandDialog({ data, authenticated, verifySession, onClose
   const recognitionRef = useRef<SpeechRecognizer | null>(null)
   const lifecycleRef = useRef<ReturnType<typeof attachSpeechLifecycle> | null>(null)
   const finalReceivedRef = useRef(false)
-  const transcriptBufferRef = useRef(new SpeechTranscriptBuffer())
-  const transcriptGateRef = useRef(createOnceGate())
+  const activeSpeechSessionRef = useRef<ReturnType<typeof createSpeechCommandSession> | null>(null)
   const speechStartedAtRef = useRef<number | null>(null)
   const mountedRef = useRef(false)
   const cancelledRef = useRef(false)
@@ -83,11 +82,11 @@ export function VoiceCommandDialog({ data, authenticated, verifySession, onClose
   useEffect(() => {
     mountedRef.current = true
     const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape') close() }
-    function close() { recordSpeechEvent('modal_closed');cancelledRef.current = true; lifecycleRef.current?.cancel(); lifecycleRef.current = null; recognitionRef.current = null; onCloseRef.current() }
+    function close() { recordSpeechEvent('modal_closed');cancelledRef.current = true;activeSpeechSessionRef.current?.cancel();activeSpeechSessionRef.current=null;lifecycleRef.current?.cancel();lifecycleRef.current?.dispose(); lifecycleRef.current = null; recognitionRef.current = null; onCloseRef.current() }
     const previousOverflow = document.body.style.overflow
     document.body.style.overflow = 'hidden'
     window.addEventListener('keydown', onKey)
-    return () => { mountedRef.current = false;window.removeEventListener('keydown', onKey); clearSpeechTimers(); lifecycleRef.current?.cancel(); lifecycleRef.current = null; recognitionRef.current = null; document.body.style.overflow = previousOverflow }
+    return () => { mountedRef.current = false;window.removeEventListener('keydown', onKey); clearSpeechTimers(); activeSpeechSessionRef.current?.cancel();activeSpeechSessionRef.current=null;lifecycleRef.current?.cancel();lifecycleRef.current?.dispose(); lifecycleRef.current = null; recognitionRef.current = null; document.body.style.overflow = previousOverflow }
   }, [clearSpeechTimers])
 
   const interpretTranscript = async (value: string) => {
@@ -121,23 +120,30 @@ export function VoiceCommandDialog({ data, authenticated, verifySession, onClose
     }
   }
 
-  const finalizeTranscript = (value = transcriptBufferRef.current.finalTranscript()) => {
-    const transcript = value.trim()
-    if (!transcript || cancelledRef.current) return false
-    return transcriptGateRef.current.run(() => {
-      finalReceivedRef.current = true
-      setFinalTranscript(transcript);setInterimTranscript('');setText(transcript)
-      setAttempt((previous) => previous + 1);setAnalysis(null);setSelectedItemId('')
-      commandIdRef.current = `voice-${crypto.randomUUID()}`
-      recordSpeechEvent('automatic_interpretation_attempted')
-      setInterpretationAttempts((previous) => previous + 1)
-      void interpretTranscript(transcript)
-    })
+  const finalizeTranscript = (session: ReturnType<typeof createSpeechCommandSession>) => {
+    if (activeSpeechSessionRef.current !== session || cancelledRef.current) return false
+    const transcript = session.complete()?.trim()
+    if (!transcript) return false
+    finalizeCompletedTranscript(transcript)
+    return true
+  }
+
+  function finalizeCompletedTranscript(transcript: string) {
+    const value = transcript.trim()
+    if (!value || cancelledRef.current) return
+    finalReceivedRef.current = true
+    setFinalTranscript(value);setInterimTranscript('');setText(value)
+    setAttempt((previous) => previous + 1);setAnalysis(null);setSelectedItemId('')
+    commandIdRef.current = `voice-${crypto.randomUUID()}`
+    recordSpeechEvent('automatic_interpretation_attempted');setInterpretationAttempts((previous) => previous + 1)
+    void interpretTranscript(value)
   }
 
   const startListening = () => {
+    if (recognitionRef.current || activeSpeechSessionRef.current?.isActive()) return
+    interpretationRef.current++
     setError(''); recognitionErrorRef.current='';recognitionErrorCodeRef.current='';commandIdRef.current='';setAnalysis(null); setSelectedItemId(''); finalReceivedRef.current = false
-    setInterimTranscript('');setFinalTranscript('');transcriptBufferRef.current.reset();transcriptGateRef.current.reset()
+    setInterimTranscript('');setFinalTranscript('')
     if (!canProcessVoiceCommand(authenticated)) { setPhase('error'); setError('Your private session is unavailable. Sign in again before using inventory commands.'); return }
     if (recognitionRef.current) return
     const speechWindow = window as SpeechWindow
@@ -145,6 +151,8 @@ export function VoiceCommandDialog({ data, authenticated, verifySession, onClose
     if (!SpeechRecognition) { recognitionErrorCodeRef.current='api-unavailable';setPhase('error'); setError('This browser does not expose speech transcription. You can still type, or use the iPhone keyboard microphone if available.'); return }
     try {
       const recognition = new SpeechRecognition()
+      const speechSession = createSpeechCommandSession()
+      activeSpeechSessionRef.current = speechSession
       recognition.lang = 'en-US'; recognition.continuous = false; recognition.interimResults = true
       cancelledRef.current = false
       startedRef.current = false
@@ -152,19 +160,20 @@ export function VoiceCommandDialog({ data, authenticated, verifySession, onClose
       setSpeechEvents([{at:0,event:'start_requested_by_tap'}]);setDiagnosticsCopied('')
       const lifecycle = attachSpeechLifecycle(recognition, {
       onResult: (event) => {
-        if(cancelledRef.current || !mountedRef.current)return
-        const result=transcriptBufferRef.current.update(event)
+        if(cancelledRef.current || !mountedRef.current || activeSpeechSessionRef.current !== speechSession || !speechSession.isActive())return
+        const result=speechSession.update(event)
+        if(!result)return
         setInterimTranscript(result.interimTranscript);setFinalTranscript(result.finalTranscript)
         const visible=[result.finalTranscript,result.interimTranscript].filter(Boolean).join(' ').trim()
         if(visible)setText(visible)
         if(result.finalTranscript){
           finalReceivedRef.current=true;setPhase('transcript_received');recordSpeechEvent('final_result_received')
           if(finalSettleTimerRef.current!==null)window.clearTimeout(finalSettleTimerRef.current)
-          finalSettleTimerRef.current=window.setTimeout(()=>{finalSettleTimerRef.current=null;finalizeTranscript()},900)
+          finalSettleTimerRef.current=window.setTimeout(()=>{finalSettleTimerRef.current=null;finalizeTranscript(speechSession)},900)
         } else if(result.interimTranscript) recordSpeechEvent('interim_result_received')
       },
       onError: (errorCode) => {
-        if (cancelledRef.current) return
+        if (cancelledRef.current || activeSpeechSessionRef.current !== speechSession || !speechSession.isActive()) return
         recognitionErrorCodeRef.current=errorCode
         recordSpeechEvent('recognition_error',errorCode)
         const reasons: Record<string, string> = {
@@ -177,23 +186,26 @@ export function VoiceCommandDialog({ data, authenticated, verifySession, onClose
         }
         const reason = reasons[errorCode] ?? 'Speech recognition ended unexpectedly. Try again or use the microphone on the iPhone keyboard to dictate into the command box.'
         recognitionErrorRef.current = reason
-        if(!transcriptBufferRef.current.finalTranscript()){setPhase('error');setError(reason)}
+        if(!finalReceivedRef.current){setPhase('error');setError(reason)}
       },
-      onStart: () => { if(cancelledRef.current || !mountedRef.current)return;recordSpeechEvent('recognition_start');startedRef.current=true;if(startWatchdogRef.current!==null)window.clearTimeout(startWatchdogRef.current);startWatchdogRef.current=null;listenWatchdogRef.current=window.setTimeout(()=>{if(!recognitionRef.current)return;recognitionErrorCodeRef.current='listening-timeout';recordSpeechEvent('listening_timeout');setError('Listening timed out without a completed transcript. iPhone may expose the API without returning speech. Retry, use keyboard dictation, or type.');setPhase('error');clearSpeechTimers();cancelledRef.current=true;lifecycleRef.current?.cancel();lifecycleRef.current=null;recognitionRef.current=null},45000);setPhase('listening') },
-      onAudioStart: () => { recordSpeechEvent('audio_start');if (!finalReceivedRef.current && mountedRef.current) setPhase('listening') },
-      onAudioEnd: () => recordSpeechEvent('audio_end'),
-      onSpeechStart: () => {recordSpeechEvent('speech_start');if(mountedRef.current)setPhase('listening')},
-      onSpeechEnd: () => recordSpeechEvent('speech_end'),
-      onNoMatch: () => recordSpeechEvent('no_match'),
+      onStart: () => { if(cancelledRef.current || !mountedRef.current || activeSpeechSessionRef.current!==speechSession)return;recordSpeechEvent('recognition_start');startedRef.current=true;if(startWatchdogRef.current!==null)window.clearTimeout(startWatchdogRef.current);startWatchdogRef.current=null;listenWatchdogRef.current=window.setTimeout(()=>{if(activeSpeechSessionRef.current!==speechSession)return;recognitionErrorCodeRef.current='listening-timeout';recordSpeechEvent('listening_timeout');setError('Listening timed out without a completed transcript. iPhone may expose the API without returning speech. Retry, use keyboard dictation, or type.');setPhase('error');clearSpeechTimers();cancelledRef.current=true;speechSession.cancel();activeSpeechSessionRef.current=null;lifecycleRef.current?.cancel();lifecycleRef.current?.dispose();lifecycleRef.current=null;recognitionRef.current=null},45000);setPhase('listening') },
+      onAudioStart: () => { if(activeSpeechSessionRef.current!==speechSession||!speechSession.isActive())return;recordSpeechEvent('audio_start');if (!finalReceivedRef.current && mountedRef.current) setPhase('listening') },
+      onAudioEnd: () => {if(activeSpeechSessionRef.current===speechSession)recordSpeechEvent('audio_end')},
+      onSpeechStart: () => {if(activeSpeechSessionRef.current!==speechSession||!speechSession.isActive())return;recordSpeechEvent('speech_start');if(mountedRef.current)setPhase('listening')},
+      onSpeechEnd: () => {if(activeSpeechSessionRef.current===speechSession)recordSpeechEvent('speech_end')},
+      onNoMatch: () => {if(activeSpeechSessionRef.current===speechSession)recordSpeechEvent('no_match')},
       onEnd: ({ cancelled, started, hasResult }) => {
+        if (activeSpeechSessionRef.current !== speechSession) return
         recordSpeechEvent('recognition_end',hasResult?'final-result-present':'no-final-result')
         clearSpeechTimers()
         recognitionRef.current = null
         lifecycleRef.current = null
         if(!mountedRef.current)return
-        if (cancelled || cancelledRef.current) { if(recognitionErrorRef.current){setPhase('error');setError(recognitionErrorRef.current)}else setPhase('cancelled');return }
-        const transcript=transcriptBufferRef.current.finalTranscript()
-        if(transcript){setPhase('transcript_received');finalizeTranscript(transcript);return}
+        if (cancelled || cancelledRef.current) { speechSession.cancel();activeSpeechSessionRef.current=null;if(recognitionErrorRef.current){setPhase('error');setError(recognitionErrorRef.current)}else setPhase('cancelled');return }
+        const transcript=speechSession.complete()
+        activeSpeechSessionRef.current = null
+        if(transcript){setPhase('transcript_received');finalizeCompletedTranscript(transcript);return}
+        if(speechSession.isCompleted())return
         if (hasResult || finalReceivedRef.current) return
         if (!recognitionErrorCodeRef.current) recognitionErrorCodeRef.current='no-final-transcript'
         setPhase('error')
@@ -206,15 +218,15 @@ export function VoiceCommandDialog({ data, authenticated, verifySession, onClose
       // WebKit requires start() directly in the user's tap handler. Do not await
       // network/session work before consuming the gesture; session is verified
       // before interpretation and again before any confirmed sale.
-      startWatchdogRef.current=window.setTimeout(()=>{if(!recognitionRef.current)return;recognitionErrorCodeRef.current='start-timeout';recognitionErrorRef.current='The browser did not report recognition start within 10 seconds.';recordSpeechEvent('start_timeout');setError(`${recognitionErrorRef.current} Check Safari permission or use keyboard dictation.`);setPhase('error');clearSpeechTimers();cancelledRef.current=true;lifecycleRef.current?.cancel();lifecycleRef.current=null;recognitionRef.current=null},10000)
+      startWatchdogRef.current=window.setTimeout(()=>{if(activeSpeechSessionRef.current!==speechSession)return;recognitionErrorCodeRef.current='start-timeout';recognitionErrorRef.current='The browser did not report recognition start within 10 seconds.';recordSpeechEvent('start_timeout');setError(`${recognitionErrorRef.current} Check Safari permission or use keyboard dictation.`);setPhase('error');clearSpeechTimers();cancelledRef.current=true;speechSession.cancel();activeSpeechSessionRef.current=null;lifecycleRef.current?.cancel();lifecycleRef.current?.dispose();lifecycleRef.current=null;recognitionRef.current=null},10000)
       lifecycle.start()
     } catch (cause) {
-      recognitionErrorCodeRef.current='start-exception';recordSpeechEvent('start_threw');clearSpeechTimers();lifecycleRef.current?.cancel(); lifecycleRef.current = null; recognitionRef.current = null; setPhase('error')
+      recognitionErrorCodeRef.current='start-exception';recordSpeechEvent('start_threw');clearSpeechTimers();activeSpeechSessionRef.current?.cancel();activeSpeechSessionRef.current=null;lifecycleRef.current?.cancel(); lifecycleRef.current = null; recognitionRef.current = null; setPhase('error')
       setError(cause instanceof Error ? `${cause.message} Check microphone permission, retry, or use iPhone keyboard dictation.` : 'Speech recognition could not start. Check microphone permission or use iPhone keyboard dictation.')
     }
   }
 
-  const cancelListening = () => { recordSpeechEvent('cancelled_by_user');cancelledRef.current = true; recognitionErrorRef.current='';recognitionErrorCodeRef.current='';clearSpeechTimers();lifecycleRef.current?.cancel(); lifecycleRef.current = null; recognitionRef.current = null; setError(''); setPhase('cancelled') }
+  const cancelListening = () => { recordSpeechEvent('cancelled_by_user');cancelledRef.current = true;recognitionErrorRef.current='';recognitionErrorCodeRef.current='';clearSpeechTimers();activeSpeechSessionRef.current?.cancel();activeSpeechSessionRef.current=null;lifecycleRef.current?.cancel();lifecycleRef.current?.dispose(); lifecycleRef.current = null; recognitionRef.current = null; setError(''); setPhase('cancelled') }
   const chooseItem = (item: InventoryItem) => {
     setSelectedItemId(item.id)
     setDetailsOpen(true)
@@ -264,7 +276,7 @@ export function VoiceCommandDialog({ data, authenticated, verifySession, onClose
 
   const lotName = resolvedItem ? data.lots.find((lot) => lot.id === resolvedItem.lotId)?.name ?? 'Standalone acquisition' : ''
   const previewValues = command && resolvedItem ? voiceSaleInitial(command, resolvedItem) : undefined
-  const closeDialog = () => { recordSpeechEvent('modal_closed');cancelledRef.current = true; clearSpeechTimers();lifecycleRef.current?.cancel(); lifecycleRef.current = null; recognitionRef.current = null; onCloseRef.current() }
+  const closeDialog = () => { recordSpeechEvent('modal_closed');cancelledRef.current = true; clearSpeechTimers();activeSpeechSessionRef.current?.cancel();activeSpeechSessionRef.current=null;lifecycleRef.current?.cancel();lifecycleRef.current?.dispose(); lifecycleRef.current = null; recognitionRef.current = null; onCloseRef.current() }
   const speechWindow = window as SpeechWindow
   const speechApiName = speechWindow.SpeechRecognition ? 'SpeechRecognition' : speechWindow.webkitSpeechRecognition ? 'webkitSpeechRecognition' : 'unavailable'
   const standalone = window.matchMedia?.('(display-mode: standalone)').matches === true || (navigator as Navigator & { standalone?: boolean }).standalone === true

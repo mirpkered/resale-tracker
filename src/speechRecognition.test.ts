@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { attachSpeechLifecycle, browserSpeechRecognitionAvailable, createOnceGate, SpeechTranscriptBuffer, type SpeechRecognizer, type SpeechWindow } from './speechRecognition'
+import { attachSpeechLifecycle, browserSpeechRecognitionAvailable, createOnceGate, createSpeechCommandSession, SpeechTranscriptBuffer, type SpeechRecognizer, type SpeechWindow } from './speechRecognition'
 
 describe('browser speech recognition capability', () => {
   it('detects standard and WebKit-prefixed browser speech recognition', () => {
@@ -83,5 +83,48 @@ describe('speech recognition lifecycle', () => {
     expect(attempts).toEqual(['final'])
     gate.reset();expect(gate.run(()=>attempts.push('retry'))).toBe(true)
     expect(attempts).toEqual(['final','retry'])
+  })
+
+  it('automatically completes final and usable interim-only transcripts once per isolated session',()=>{
+    const final=createSpeechCommandSession()
+    final.update({resultIndex:0,results:[{isFinal:true,0:{transcript:'How many are listed?'}}]})
+    expect(final.complete()).toBe('How many are listed?')
+    expect(final.complete()).toBeNull()
+
+    const interim=createSpeechCommandSession()
+    interim.update({resultIndex:0,results:[{isFinal:false,0:{transcript:'Show my Halloween lot'}}]})
+    expect(interim.complete()).toBe('Show my Halloween lot')
+    expect(final.isCompleted()).toBe(true)
+    expect(interim.isCompleted()).toBe(true)
+  })
+
+  it('does not complete empty or canceled speech and ignores late results',()=>{
+    const empty=createSpeechCommandSession()
+    empty.update({resultIndex:0,results:[{isFinal:false,0:{transcript:'   '}}]})
+    expect(empty.complete()).toBeNull()
+    const canceled=createSpeechCommandSession()
+    canceled.update({resultIndex:0,results:[{isFinal:false,0:{transcript:'do not run'}}]})
+    canceled.cancel()
+    expect(canceled.complete()).toBeNull()
+    expect(canceled.update({resultIndex:0,results:[{isFinal:true,0:{transcript:'stale'}}]})).toBeNull()
+  })
+
+  it('keeps sequential voice transcripts separate across three or more recognition sessions',()=>{
+    const sessions=Array.from({length:4},(_,index)=>{
+      const session=createSpeechCommandSession()
+      session.update({resultIndex:0,results:[{isFinal:true,0:{transcript:`command ${index+1}`}}]})
+      return session
+    })
+    expect(sessions.map((session)=>session.complete())).toEqual(['command 1','command 2','command 3','command 4'])
+  })
+
+  it('detaches completed lifecycle callbacks so an old recognizer cannot affect the next session',()=>{
+    const old=fakeRecognition(),next=fakeRecognition(),events:string[]=[]
+    const oldLifecycle=attachSpeechLifecycle(old,{onResult:()=>events.push('old result'),onEnd:()=>events.push('old end')})
+    const nextLifecycle=attachSpeechLifecycle(next,{onResult:()=>events.push('new result'),onEnd:()=>events.push('new end')})
+    oldLifecycle.start();old.end();nextLifecycle.start()
+    old.onresult?.({resultIndex:0,results:[{isFinal:true,0:{transcript:'late'}}]})
+    next.onresult?.({resultIndex:0,results:[{isFinal:true,0:{transcript:'new'}}]})
+    expect(events).toEqual(['old end','new result'])
   })
 })

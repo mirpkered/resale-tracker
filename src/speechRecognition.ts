@@ -43,10 +43,16 @@ export function attachSpeechLifecycle(recognition: SpeechRecognizer, handlers: S
   recognition.onresult = (event) => { hasResult = Array.from(event.results).some((result) => result.isFinal && result[0].transcript.trim().length > 0); handlers.onResult(event) }
   recognition.onnomatch = () => handlers.onNoMatch?.()
   recognition.onerror = (event) => handlers.onError?.(event.error)
-  recognition.onend = () => { if (endDelivered) return; endDelivered = true; handlers.onEnd({ cancelled, started, hasResult }) }
+  const detach = () => {
+    recognition.onstart = null; recognition.onaudiostart = null; recognition.onaudioend = null
+    recognition.onspeechstart = null; recognition.onspeechend = null; recognition.onresult = null
+    recognition.onnomatch = null; recognition.onerror = null; recognition.onend = null
+  }
+  recognition.onend = () => { if (endDelivered) return; endDelivered = true; handlers.onEnd({ cancelled, started, hasResult }); detach() }
   return {
     start() { if (startRequested || cancelled) return; startRequested = true; recognition.start() },
     cancel() { if (cancelled) return; cancelled = true; recognition.abort() },
+    dispose() { endDelivered = true; detach() },
   }
 }
 
@@ -75,7 +81,28 @@ export class SpeechTranscriptBuffer {
   }
 
   finalTranscript() { return [...this.finalSegments.entries()].sort(([a], [b]) => a - b).map(([, value]) => value).join(' ').trim() }
+  usableTranscript() { return this.finalTranscript() || [...this.interimSegments.entries()].sort(([a], [b]) => a - b).map(([, value]) => value).join(' ').trim() }
   reset() { this.finalSegments.clear(); this.interimSegments.clear() }
+}
+
+/** Isolated transcript and one-shot completion state for one microphone attempt. */
+export function createSpeechCommandSession() {
+  const transcript = new SpeechTranscriptBuffer()
+  const completion = createOnceGate()
+  let active = true
+  let completed = false
+  return {
+    update(event: SpeechResultEvent) { return active ? transcript.update(event) : null },
+    complete() {
+      if (!active) return null
+      const value = transcript.usableTranscript()
+      if (!value || !completion.run(() => { active = false; completed = true })) return null
+      return value
+    },
+    cancel() { active = false; transcript.reset() },
+    isActive() { return active },
+    isCompleted() { return completed },
+  }
 }
 
 /** A per-session gate that prevents duplicate final-result handling. */
