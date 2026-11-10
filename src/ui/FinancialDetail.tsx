@@ -1,9 +1,9 @@
 import { ArrowLeft, ArrowUpRight, CircleHelp } from 'lucide-react'
 import { formatMoney, getMetrics, lotUnallocatedCents, type TrackerData } from '../domain'
-import { acquisitionBreakdown, cashPositionBreakdown, cashReceivedBreakdown, pendingProceedsBreakdown, realizedProfitBreakdown } from '../financialBreakdown'
+import { acquisitionBreakdown, cashPositionBreakdown, cashReceivedBreakdown, pendingProceedsBreakdown } from '../financialBreakdown'
 
-export type DashboardDetailKind = 'investment'|'cash_received'|'cash_position'|'pending'|'profit'
-const TITLES:Record<DashboardDetailKind,string>={investment:'Purchase investment',cash_received:'Cash received',cash_position:'Cash position',pending:'Pending proceeds',profit:'Realized profit'}
+export type DashboardDetailKind = 'investment'|'cash_received'|'cash_position'|'pending'
+const TITLES:Record<DashboardDetailKind,string>={investment:'Purchase investment',cash_received:'Cash received',cash_position:'Cash position',pending:'Pending proceeds'}
 
 export function FinancialDetail({kind,data,onBack,onOpenLot,onOpenTransactions}:{kind:DashboardDetailKind;data:TrackerData;onBack:()=>void;onOpenLot:(id:string)=>void;onOpenTransactions:()=>void}){
   const metrics=getMetrics(data)
@@ -14,7 +14,6 @@ export function FinancialDetail({kind,data,onBack,onOpenLot,onOpenTransactions}:
     {kind==='cash_received'&&<CashReceivedDetails data={data}/>}
     {kind==='cash_position'&&<CashPositionDetails data={data} onOpenLot={onOpenLot}/>}
     {kind==='pending'&&<PendingDetails data={data} onOpenLot={onOpenLot} onOpenTransactions={onOpenTransactions}/>}
-    {kind==='profit'&&<ProfitDetails data={data} onOpenLot={onOpenLot}/>}
   </section>
 }
 
@@ -41,8 +40,4 @@ function CashPositionDetails({data,onOpenLot}:{data:TrackerData;onOpenLot:(id:st
 function PendingDetails({data,onOpenLot,onOpenTransactions}:{data:TrackerData;onOpenLot:(id:string)=>void;onOpenTransactions:()=>void}){
   const rows=pendingProceedsBreakdown(data)
   return rows.length?<div className="financial-detail-list">{rows.map((row)=><article className="panel financial-record-card" key={`${row.source}-${row.id}`}><div className="financial-record-head"><div><h3>{row.title}</h3><span>{row.status} · {row.lotName}</span></div><b>{formatMoney(row.amountCents)} expected</b></div><p>{row.detail}</p><div className="financial-detail-actions">{row.lotId&&<LotLink lotId={row.lotId} name="Open purchase lot" onOpen={onOpenLot}/>}<button type="button" className="secondary" onClick={onOpenTransactions}>Review in Transactions</button></div></article>)}</div>:<EmptyFinancial message="There are no pending payouts or unpaid sale proceeds."/>
-}
-function ProfitDetails({data,onOpenLot}:{data:TrackerData;onOpenLot:(id:string)=>void}){
-  const rows=realizedProfitBreakdown(data)
-  return rows.length?<div className="financial-detail-list">{rows.map((row)=><article className="panel financial-record-card" key={row.id}><div className="financial-record-head"><div><h3>{row.title}</h3><span>{row.lotName}{row.complete?' · fully allocated':' · partial or unverified allocation'}</span></div><b>{row.profitCents===null?'Not verified':formatMoney(row.profitCents)}</b></div><div className="financial-record-lines"><div><span>Net proceeds</span><strong>{formatMoney(row.proceedsCents)}</strong></div><div><span>Recorded selling expenses</span><strong>{formatMoney(row.expenseCents)}</strong></div><div><span>Allocated cost basis</span><strong>{formatMoney(row.costCents)}</strong></div></div><p className="financial-note">{row.note}</p>{row.lotId&&<LotLink lotId={row.lotId} name="Open purchase lot" onOpen={onOpenLot}/>}</article>)}</div>:<EmptyFinancial message="No completed sales have a verified realized profit yet."/>
 }
