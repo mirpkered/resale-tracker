@@ -8,7 +8,7 @@ import { applyCloudMerge, applyThreeWayChoices } from '../cloudSync'
 import { useCloudSync } from '../useCloudSync'
 import { resolveStartupView } from '../startup'
 import { canActivateAppUpdate } from '../pwaUpdate'
-import { correctExistingSale, recordQuickSale } from '../quickSale'
+import { correctExistingSale, recordBundleSale, recordQuickSale } from '../quickSale'
 import { PRIMARY_NAVIGATION, realizedLotProfitCents, summarizeLot } from '../lotView'
 import { ItemDetails, LotInventory, LotsOverview, SettingsHome } from './LotFirst'
 import { ListingsView } from './ListingsView'
@@ -127,12 +127,12 @@ export default function App() {
     persist(result.data); setModal(null); setQuickSaleItemId(null)
     setNotice(`Sale recorded for ${formatMoney(result.sale.grossCents)}. Cash and lot totals updated.`)
   }
-  const recordVoiceSale = async (itemId: string, input: Parameters<typeof recordQuickSale>[2]) => {
+  const recordVoiceSale = async (selections: {itemId:string;quantity:number}[], input: Parameters<typeof recordBundleSale>[2]) => {
     await cloud.verifySession()
-    const result = recordQuickSale(data, itemId, input)
+    const result = recordBundleSale(data, selections, input)
     if (!result.duplicate) persist(result.data)
     setVoiceOpen(false)
-    setNotice(result.duplicate ? 'This command was already recorded. No duplicate sale was created.' : `Sale recorded for ${formatMoney(result.sale.grossCents)}. Cash and lot totals updated.`)
+    setNotice(result.duplicate ? 'This command was already recorded. No duplicate sale was created.' : input.paymentReceived ? `Sale recorded and payment received: ${formatMoney(result.sale.grossCents)} gross. Financial totals updated.` : `Sale recorded for ${formatMoney(result.sale.grossCents)} gross; awaiting payment. It is not counted as cash received.`)
   }
   const markPaid = async (sale: Sale) => {
     const unitIds=(sale.lines??[]).flatMap((line)=>line.unitIds??[]);persist({...data,units:(data.units??[]).map((unit)=>unitIds.includes(unit.id)&&unit.status==='awaiting_payment'?{...unit,status:'completed'}:unit),items:data.items.map((item)=>sale.itemIds.includes(item.id)&&item.status==='awaiting_payment'?{...item,status:'completed'}:item),sales:data.sales.map((s)=>s.id===sale.id?{...s,paymentStatus:'paid',status:'completed',receivedCents:sale.grossCents-sale.feeCents-sale.shippingCents-sale.otherExpenseCents}:s)})

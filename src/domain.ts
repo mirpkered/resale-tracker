@@ -85,7 +85,12 @@ export function getMetrics(data: TrackerData) {
   const otherCashExpensesCents = data.expenses.reduce((sum, expense) => sum + (isFieldConfirmed(expense,'amountCents')?expense.amountCents:0), 0)+(data.ledgerTransactions??[]).filter((t)=>t.type==='other_expense'&&t.paymentStatus==='confirmed'&&isFieldConfirmed(t,'expensesCents')).reduce((sum,t)=>sum+t.expensesCents,0)
   const overallCashPositionCents = netCashProceedsCents - purchaseInvestmentCents - otherCashExpensesCents
   const realizedItemProfitCents = data.sales.filter((sale) => sale.status === 'completed' && isFieldConfirmed(sale,'receivedCents') && (sale.paymentStatus === 'paid' || sale.paymentStatus === 'refunded' || sale.paymentStatus === 'partial') && (sale.lines??[]).every((line)=>isFieldConfirmed(data.items.find((item)=>item.id===line.itemId)??{},'costCents'))).reduce((sum, sale) => {
-    if (sale.lines?.length) return sum + sale.lines.reduce((lineSum, line) => lineSum + lineNetProceedsCents(sale, line) - retainedCostCents(line), 0)
+    if (sale.lines?.length) {
+      // A confirmed bundle total is cash, but it is not item-level realized
+      // profit until verified proceeds shares exist for every line.
+      if (sale.lines.some((line) => line.proceedsCents === undefined)) return sum
+      return sum + sale.lines.reduce((lineSum, line) => lineSum + lineNetProceedsCents(sale, line) - retainedCostCents(line), 0)
+    }
     const cost = sale.itemIds.reduce((itemsSum, itemId) => itemsSum + (data.items.find((item) => item.id === itemId)?.costCents ?? 0), 0)
     return sum + saleNetCents(sale) - cost
   }, 0)

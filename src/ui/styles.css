@@ -156,3 +156,16 @@ html[data-theme=dark] .startup-error{background:#3a2822;border-color:#634538;col
 .item-status,.actual-price{font-size:9px;padding:3px 6px}
 .lot-item-asking{max-width:76px;gap:2px}
 @media(max-width:760px){.lot-item-list{gap:7px}.lot-item-card{min-height:62px;grid-template-columns:30px minmax(0,1fr) auto;gap:7px;padding:7px 8px}.lot-item-image{width:30px;height:30px}.lot-item-content>b{font-size:11px}.lot-item-content>span{font-size:9px}.lot-item-asking{max-width:64px}}
+/* Voice bundle review: keep every title and selector usable on narrow iPhone screens. */
+.voice-sale-target{display:grid;gap:8px;min-width:0;max-width:100%;padding:10px;border:1px solid var(--line);border-radius:9px;background:var(--panel);overflow-wrap:anywhere}
+.voice-sale-target-heading,.voice-sale-target-match{display:grid;gap:5px;min-width:0;max-width:100%;overflow-wrap:anywhere}
+.voice-sale-target-heading>span,.voice-sale-target-match>span,.voice-unavailable-suggestions span{font-size:11px;color:var(--muted);overflow-wrap:anywhere}
+.voice-sale-target-heading>b,.voice-sale-target-match>b{font-size:13px;overflow-wrap:anywhere;word-break:break-word}
+.voice-sale-target label{display:grid;gap:6px;min-width:0;font-size:12px;font-weight:700}
+.voice-sale-target select{width:100%;min-width:0;min-height:44px;padding:8px;border:1px solid var(--line);border-radius:8px;background:var(--field);color:var(--text)}
+.voice-unavailable-suggestions{display:grid;gap:6px;min-width:0;font-size:11px;overflow-wrap:anywhere}
+.voice-unavailable-suggestions summary{min-height:40px;display:flex;align-items:center;cursor:pointer;color:var(--muted)}
+.voice-unavailable-suggestions span{display:block;padding:5px 0}
+.bundle-total-callout{padding:10px;border:1px solid var(--line);border-radius:8px;background:var(--panel);overflow-wrap:anywhere}
+.bundle-selected-items{display:grid;gap:7px;min-width:0;padding:10px;border:1px solid var(--line);border-radius:8px;background:var(--panel);overflow-wrap:anywhere}
+.bundle-selected-items>span,.bundle-selected-items>small{font-size:11px;line-height:1.45;overflow-wrap:anywhere}

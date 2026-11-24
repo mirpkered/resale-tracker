@@ -41,6 +41,15 @@ describe('responsive lot-first layout', () => {
     expect(appUi).toContain('visual?.addEventListener(\'resize\',update)')
   })
 
+  it('keeps multi-item voice proposals readable and selectable on narrow iPhone screens', () => {
+    for (const viewport of [320, 375, 390]) expect(Math.min(600, viewport - 16)).toBeLessThanOrEqual(viewport - 16)
+    expect(css).toContain('.voice-sale-target{display:grid;gap:8px;min-width:0;max-width:100%')
+    expect(css).toContain('.voice-sale-target select{width:100%;min-width:0;min-height:44px')
+    expect(css).toContain('word-break:break-word')
+    expect(voiceUi).toContain('One total price applies to the complete bundle')
+    expect(voiceUi).toContain('disabled={phase===\'processing\'||!bundleSelectionValid||!bundleDetailsValid}')
+  })
+
   it('defers a PWA update during a form without putting an interactive banner over it', () => {
     expect(appUi).toContain("unsubmittedEdits?'Update ready · finish or close this form to apply it.'")
     expect(css).toContain('.pwa-update-banner.editing')

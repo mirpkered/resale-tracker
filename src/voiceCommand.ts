@@ -6,6 +6,7 @@ export interface ParsedSaleCommand {
   intent: 'record_sale'
   sourceText: string
   itemQuery: string
+  itemQueries: string[]
   quantity: number
   amountCents?: number
   amountMode: 'total' | 'per_unit'
@@ -16,8 +17,17 @@ export interface ParsedSaleCommand {
   commandId: string
 }
 
+export interface VoiceSaleTarget {
+  query: string
+  quantity: number
+  matches: InventoryItem[]
+  suggestions: InventoryItem[]
+  matched: InventoryItem | null
+  ambiguous: boolean
+}
+
 export type VoiceAnalysis =
-  | { kind: 'sale'; command: ParsedSaleCommand; matches: InventoryItem[]; matched: InventoryItem | null; ambiguous: boolean; query: string }
+  | { kind: 'sale'; command: ParsedSaleCommand; matches: InventoryItem[]; matched: InventoryItem | null; ambiguous: boolean; query: string; targets: VoiceSaleTarget[] }
   | { kind: 'read_only'; response: string; matches: InventoryItem[] }
   | FinancialCommandAnalysis
   | { kind: 'open_lot'; lotId: string; lotName: string; message: string }
@@ -30,7 +40,7 @@ const NUMBER_WORDS: Record<string, number> = {
   twenty: 20, thirty: 30, forty: 40, fifty: 50, sixty: 60, seventy: 70, eighty: 80, ninety: 90, hundred: 100,
 }
 const WORD_NUMBER = Object.keys(NUMBER_WORDS).sort((a, b) => b.length - a.length).join('|')
-const MONEY_PATTERN = String.raw`(?:\$\s*\d+(?:\.\d{1,2})?|\d+(?:\.\d{1,2})?\s*(?:dollars?|bucks?)?|(?:${WORD_NUMBER})(?:[\s-]+(?:${WORD_NUMBER}))?[- ]?(?:dollars?|bucks?|dollar)?(?:\s+(?:each|per copy))?)`
+const MONEY_PATTERN = String.raw`(?:\$\s*\d+(?:\.\d{1,2})?|\d+(?:\.\d{1,2})?\s*(?:dollars?|bucks?)?|(?:${WORD_NUMBER})(?:[\s-]+(?:${WORD_NUMBER}))?[- ]?(?:dollars?|bucks?|dollar)?)(?:\s+(?:each|per\s+(?:item|copy|unit)))?`
 
 function numericWords(value: string): number | null {
   const words = value.toLowerCase().replaceAll('-', ' ').trim().split(/\s+/).filter((word) => word in NUMBER_WORDS)
@@ -47,7 +57,7 @@ function numericWords(value: string): number | null {
 }
 
 function moneyCents(expression: string): number | undefined {
-  const input = expression.toLowerCase().replaceAll(/\b(?:dollars?|bucks?|each|per copy)\b/g, '').replace(/\$/g, '').trim()
+  const input = expression.toLowerCase().replaceAll(/\b(?:dollars?|bucks?|each|per\s+(?:item|copy|unit))\b/g, '').replace(/\$/g, '').trim()
   if (/^\d/.test(input)) {
     const match = input.match(/^(\d+)(?:\.(\d{1,2}))?$/)
     if (!match) return undefined
@@ -82,6 +92,8 @@ function saleMoneyMatch(text: string): { value: string; index: number } | undefi
 
 function normalize(value: string): string {
   return value.normalize('NFKD').replace(/[\u0300-\u036f]/g, '').toLowerCase()
+    .replace(/\bxiv\b/g, '14').replace(/\bxiii\b/g, '13').replace(/\bxii\b/g, '12').replace(/\bxi\b/g, '11').replace(/\bx\b/g, '10')
+    .replace(/\b(one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty)\b/g, (_m, word: string) => String(NUMBER_WORDS[word]))
     .replace(/\bseason\s+(one|two|three|four|five|six|seven|eight|nine|ten)\b/g, (_m, word: string) => `season ${NUMBER_WORDS[word]}`)
     .replace(/\b(series|volume|vol)\s+(one|two|three|four|five|six|seven|eight|nine|ten)\b/g, (_m, kind: string, word: string) => `${kind} ${NUMBER_WORDS[word]}`)
     .replace(/[^a-z0-9]+/g, ' ').trim().replace(/\s+/g, ' ')
@@ -108,11 +120,12 @@ function cleanItemQuery(text: string, moneyMatch?: { value: string; index: numbe
     else if (/\bfor\s*$/i.test(before)) result = before.slice(0, before.toLowerCase().lastIndexOf('for'))
     else result = `${before} ${after}`
   }
+  result = result.replace(new RegExp(`\\b(?:${WORD_NUMBER})\\s+(?:copies|copy|units?)\\b`, 'gi'), ' ')
   result = result.replace(/\b(?:sold|sell|selling|mark|as|i|we|just|accepted|accepting|an?|the|copy|copies|of|this|item|for|at|on)\b/gi, ' ')
   result = result.replace(/\b(?:platform\s+)?fees?\b|\b(?:seller-paid\s+)?shipping\b|\b(?:other|selling)\s+expenses?\b/gi, ' ')
   result = result.replace(/\$\s*\d+(?:\.\d{1,2})?|\b\d+(?:\.\d{1,2})?\s*(?:dollars?|bucks?)\b/gi, ' ')
   result = result.replace(/\b\d+\s*(?:copies|copy|units?)\b/gi, ' ')
-  result = result.replace(/\b(?:one|two|three|four|five|six|seven|eight|nine|ten)\s+(?:copies|copy|units?)\b/gi, ' ')
+  result = result.replace(new RegExp(`\\b(?:${WORD_NUMBER})\\s+(?:copies|copy|units?)\\b`, 'gi'), ' ')
   result = result.replace(/\b(?:on\s+)?(?:vinted|ebay|amazon|world of books|local sale|other)\b/gi, ' ')
   result = result.replace(/\b(?:for|sold)\s*$/gi, ' ')
   return result.replace(/[.,!?;:]+/g, ' ').replace(/\s+/g, ' ').trim()
@@ -125,20 +138,60 @@ function spokenQuantity(text: string): number {
   return Number.isSafeInteger(value) && value > 0 ? value : 1
 }
 
-function parseSale(text: string, platforms: TrackerData['platforms'], commandId: string): ParsedSaleCommand | null {
+function saleItemQueries(text: string, amountMatch: { value: string; index: number } | undefined, platforms: TrackerData['platforms'], data: TrackerData): string[] {
+  let clause = amountMatch ? text.slice(0, amountMatch.index) : text
+  clause = clause.replace(/^.*?\b(?:sold|sell|selling)\b/i, '')
+  if (/\baccepted\b/i.test(text) && /\boffer\b/i.test(text)) clause = clause.replace(/^.*?\boffer\s+for\b/i, '')
+  const platformNames = [...platforms, ...PLATFORMS].filter((entry) => entry.kind === 'sales').map((entry) => entry.name).sort((a,b)=>b.length-a.length)
+  for (const name of platformNames) clause = clause.replace(new RegExp(`\\bon\\s+${name.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&')}\\b.*$`, 'i'), '')
+  clause = clause
+    .replace(/^\s*(?:(?:both|all|\d+|one|two|three|four|five|six|seven|eight|nine|ten)\s+)?(?:dvds?|blu[ -]?ray|movies?|games?|items?)\s*:?\s*/i, '')
+    .replace(/\b(?:as\s+(?:a\s+)?bundle|in\s+(?:a\s+)?bundle|bundle\s+sale|together|as\s+one\s+(?:lot|bundle))\b/gi, ' ')
+    .replace(/\b(?:total|altogether)\b/gi, ' ')
+    .replace(/[.!?]+$/g, '')
+    .trim()
+  const parts = clause.split(/[,;]|\s+and\s+/i).map((part) => part.replace(/^\s*(?:and|the bundle of)\s+/i, '').replace(/\s+$/,'').trim())
+  const cleaned = parts.map((part) => cleanItemQuery(part).replace(/\b(?:dvds?|blu[ -]?ray|movie|game|bundle|together|both|each|total)\b/gi, ' ').replace(/\s+/g,' ').trim()).filter(Boolean)
+  if (cleaned.length > 1) return cleaned
+  const one = cleanItemQuery(clause)
+  // “both [shared title prefix] games” can refer to two separately named
+  // records, such as Final Fantasy XIV: A Realm Reborn and Heavensward.
+  if (/\bboth\b/i.test(text)) {
+    const phrase = normalize(clause).replace(/\b(?:both|games?|dvds?|items?|copies|copy|the|of)\b/g, ' ').trim().split(/\s+/).filter(Boolean)
+    const candidateItems = activeItems(data)
+    const candidates = candidateItems.map((item) => {
+      const tokens = [...new Set(normalize(item.title).split(' ').filter((token) => token.length > 1 && !['edition','collection','complete','season','disc','movie','dvd','ps2','ps3','ps4','xbox','360'].includes(token)))]
+      const overlap = tokens.filter((token) => phrase.includes(token)).length
+      return { item, score: tokens.length ? overlap / tokens.length : 0 }
+    }).filter((entry) => entry.score >= 0.45)
+    if (candidates.length >= 2 && new Set(candidates.map((entry) => normalize(entry.item.title))).size >= 2) return candidates.map((entry) => entry.item.title)
+  }
+  return one ? [one] : []
+}
+
+function availableQuantity(data: TrackerData, item: InventoryItem): number {
+  if (!ACTIVE_STATUSES.includes(item.status) || item.archived || item.quantity < 1) return 0
+  const tracked = (data.units ?? []).filter((unit) => unit.itemId === item.id)
+  if (!tracked.length) return item.quantity
+  const sold = new Set(data.sales.flatMap((sale) => (sale.lines ?? []).flatMap((line) => (line.unitIds ?? []).slice(line.returnedQuantity ?? 0))))
+  return tracked.filter((unit) => ACTIVE_STATUSES.includes(unit.status) && !sold.has(unit.id)).length
+}
+
+function parseSale(text: string, platforms: TrackerData['platforms'], commandId: string, data: TrackerData): ParsedSaleCommand | null {
   if (!/\b(?:sold|sell|mark\b.*\bsold|accepted\b.*\boffer)\b/i.test(text)) return null
   const amountMatch = saleMoneyMatch(text)
   const amountCents = amountMatch ? moneyCents(amountMatch.value) : undefined
-  const amountMode = amountMatch && /\b(?:each|per copy)\b/i.test(text.slice(amountMatch.index, amountMatch.index + amountMatch.value.length)) ? 'per_unit' as const : 'total' as const
+  const amountMode = amountMatch && /\b(?:each|per\s+(?:item|copy|unit))\b/i.test(amountMatch.value) ? 'per_unit' as const : 'total' as const
   const quantity = spokenQuantity(text)
   const words = [...platforms, ...PLATFORMS].filter((entry) => entry.kind === 'sales').map((entry) => entry.name).sort((a, b) => b.length - a.length)
   const platform = words.find((name) => new RegExp(`\\bon\\s+${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i').test(text))
-  const itemQuery = cleanItemQuery(text, amountMatch)
+  const itemQueries = saleItemQueries(text, amountMatch, platforms, data)
+  const itemQuery = itemQueries[0] ?? cleanItemQuery(text, amountMatch)
   const feeCents = explicitExpense(text, ['fees?', 'platform fees?'])
   const shippingCents = explicitExpense(text, ['shipping', 'seller-paid shipping'])
   const otherExpenseCents = explicitExpense(text, ['other expenses?', 'selling expenses?'])
-  if (!itemQuery) return { intent: 'record_sale', sourceText: text, itemQuery: '', quantity, amountCents, amountMode, platform, feeCents, shippingCents, otherExpenseCents, commandId }
-  return { intent: 'record_sale', sourceText: text, itemQuery, quantity, amountCents, amountMode, platform, feeCents, shippingCents, otherExpenseCents, commandId }
+  if (!itemQuery) return { intent: 'record_sale', sourceText: text, itemQuery: '', itemQueries, quantity, amountCents, amountMode, platform, feeCents, shippingCents, otherExpenseCents, commandId }
+  return { intent: 'record_sale', sourceText: text, itemQuery, itemQueries: itemQueries.length ? itemQueries : [itemQuery], quantity, amountCents, amountMode, platform, feeCents, shippingCents, otherExpenseCents, commandId }
 }
 
 function activeItems(data: TrackerData) { return data.items.filter((item) => ACTIVE_STATUSES.includes(item.status) && item.quantity > 0 && !item.archived) }
@@ -244,18 +297,30 @@ export function analyzeVoiceCommand(text: string, data: TrackerData, commandId: 
   if (query) return query
   const financial = analyzeFinancialCommand(input, data, commandId)
   if (financial) return financial
-  const command = parseSale(input, data.platforms, commandId)
+  const command = parseSale(input, data.platforms, commandId, data)
   if (!command) return { kind: 'unsupported', message: 'Supported commands are sales, inventory search, available-item counts, and purchase-lot cash reports.' }
   if (!command.itemQuery) return { kind: 'unsupported', message: 'I could not identify the item title. Try “Sold [item title] for [amount] on [platform].”' }
-  const available = activeItems(data)
-  const ranked = available.map((item) => ({ item, score: matchScore(command.itemQuery, item) })).filter((entry) => entry.score >= 0.5).sort((a, b) => b.score - a.score)
-  const matches = ranked.map((entry) => entry.item)
-  if (!matches.length) {
-    const suggestions = data.items.map((item) => ({ item, score: matchScore(command.itemQuery, item) })).filter((entry) => entry.score >= 0.2).sort((a, b) => b.score - a.score).slice(0, 5).map((entry) => entry.item)
+  const targets: VoiceSaleTarget[] = command.itemQueries.map((query) => {
+    // Strong matches are candidates for sale. Lower-overlap matches remain
+    // suggestions only; common words such as “movie collection” must not turn
+    // an unrelated title into a saleable match.
+    const ranked = activeItems(data).map((item) => ({ item, score: matchScore(query, item) })).filter((entry) => availableQuantity(data, entry.item) > 0 && entry.score >= 0.82).sort((a, b) => b.score - a.score)
+    const bestScore = ranked[0]?.score ?? 0
+    const confident = ranked.filter((entry) => bestScore - entry.score < 0.1)
+    const matches = confident.map((entry) => entry.item)
+    const suggestions = data.items.filter((item) => !item.archived).map((item) => ({ item, score: matchScore(query, item) })).filter((entry) => entry.score >= 0.2).sort((a, b) => b.score - a.score).slice(0, 5).map((entry) => entry.item)
+    const ambiguous = matches.length > 1
+    return { query, quantity: command.itemQueries.length > 1 ? 1 : command.quantity, matches, suggestions, matched: ambiguous ? null : matches[0] ?? null, ambiguous }
+  })
+  const first = targets[0]
+  const matches = first?.matches ?? []
+  if (targets.length === 1 && !matches.length) {
+    const suggestions = first?.suggestions ?? []
     return { kind: 'unmatched', query: command.itemQuery, suggestions, message: suggestions.length ? 'No available exact match. Review these possible records; unavailable items cannot be sold.' : 'No reliable inventory match. No item or sale was created.' }
   }
-  const ambiguous = matches.length > 1 && (ranked[0].score - ranked[1].score < 0.12 || ranked[1].score >= 0.85)
-  return { kind: 'sale', command, matches, matched: ambiguous ? null : matches[0], ambiguous, query: command.itemQuery }
+  const matched = targets.length === 1 ? first.matched : null
+  const ambiguous = targets.some((target) => target.ambiguous || !target.matches.length)
+  return { kind: 'sale', command, matches, matched, ambiguous, query: command.itemQuery, targets }
 }
 
 /** Shared authenticated path for typed commands and completed speech transcripts. */

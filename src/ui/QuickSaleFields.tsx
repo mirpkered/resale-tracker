@@ -7,7 +7,7 @@ import { defaultSellerShippingCents, estimateSellingFee, type AmazonFulfillment 
 
 function moneyInput(cents: number | null | undefined) { return cents === null || cents === undefined ? '' : (cents / 100).toFixed(2) }
 
-export function QuickSaleFields({ data, item, initial = {} }: { data: TrackerData; item: InventoryItem; initial?: QuickSaleInitial }) {
+export function QuickSaleFields({ data, item, initial = {}, voiceConfirmation = false }: { data: TrackerData; item: InventoryItem; initial?: QuickSaleInitial; voiceConfirmation?: boolean }) {
   const initialPlatform = initial.platform ?? (isFieldConfirmed(item, 'platform') && item.platform.trim() ? item.platform : '')
   const [platform, setPlatform] = useState(initialPlatform)
   const [quantity, setQuantity] = useState(Math.max(1, Math.min(item.quantity, initial.quantity ?? 1)))
@@ -62,6 +62,8 @@ export function QuickSaleFields({ data, item, initial = {} }: { data: TrackerDat
     <label>Seller-paid shipping<input name="shipping" type="number" inputMode="decimal" min="0" step="0.01" value={shipping} onChange={(event) => setShipping(event.currentTarget.value)} required placeholder={platform.toLowerCase()==='amazon'&&fulfillment==='seller'?'Enter if applicable':'0.00'}/><small>{platform.toLowerCase()==='amazon'&&fulfillment==='fba'?'FBA fulfillment charges are not included without a known rate.': 'Default is editable; enter the actual seller-paid amount.'}</small></label>
     <input type="hidden" name="other" value="0.00" />
     <div className="quick-sale-estimate full" aria-live="polite"><b>Estimated sale totals · not saved yet</b><div><span>Gross sale</span><strong>{estimated ? formatMoney(estimated.gross) : 'Complete amounts'}</strong></div><div><span>Estimated net proceeds</span><strong>{estimated ? formatMoney(estimated.net) : '—'}</strong></div><div><span>Estimated item profit</span><strong className={estimated && estimated.profit < 0 ? 'red-text' : ''}>{estimated ? formatMoney(estimated.profit) : '—'}</strong></div></div>
+    {voiceConfirmation&&<label className="checkbox full"><input type="checkbox" name="paymentReceived" value="yes"/><span>Payment has been received</span></label>}
+    {voiceConfirmation&&<p className="quick-sale-cash-note full">If unchecked, this is recorded as sold but awaiting payment. It will not count as received cash.</p>}
     <p className="quick-sale-cash-note full">Confirming records the sale as received cash immediately. The original asking price is preserved.</p>
   </div>
 }

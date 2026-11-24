@@ -42,15 +42,16 @@ export interface LotSummary {
   itemCount: number
 }
 
-const grossForLine = (sale: Sale, lineIndex: number): number => {
+const grossForLine = (sale: Sale, lineIndex: number): number | null => {
   const lines = sale.lines ?? []
+  if (lines.length > 1 && lines.some((line) => line.proceedsCents === undefined)) return null
   const weights = lines.map((line) => line.proceedsCents ?? line.allocatedCostCents)
   return allocateCents(sale.grossCents, weights)[lineIndex] ?? 0
 }
 
 const saleGrossForItem = (sale: Sale, itemId: string): number => {
   const lines = sale.lines ?? []
-  if (lines.length) return lines.reduce((sum, line, index) => sum + (line.itemId === itemId ? grossForLine(sale, index) : 0), 0)
+  if (lines.length) return lines.reduce((sum, line, index) => sum + (line.itemId === itemId ? grossForLine(sale, index) ?? 0 : 0), 0)
   const indexes = sale.itemIds.map((id, index) => id === itemId ? index : -1).filter((index) => index >= 0)
   return allocateCents(sale.grossCents, sale.itemIds.map(() => 1)).reduce((sum, cents, index) => sum + (indexes.includes(index) ? cents : 0), 0)
 }
@@ -93,10 +94,22 @@ export function summarizeLot(data: TrackerData, lot: PurchaseLot): LotSummary {
   for (const sale of data.sales) {
     const lines = sale.lines ?? []
     if (lines.length) {
+      const saleLotIds = new Set(lines.map((line) => data.items.find((item) => item.id === line.itemId)?.lotId).filter((id): id is string => Boolean(id)))
+      const proceedsUnallocated = lines.length > 1 && lines.some((line) => line.proceedsCents === undefined)
+      if (proceedsUnallocated) {
+        sold += lines.filter((line) => itemIds.has(line.itemId)).reduce((sum, line) => sum + Math.max(0, line.quantity - (line.returnedQuantity ?? 0)), 0)
+        // Count the transaction total once at lot level only when every item
+        // belongs to that same lot. Cross-lot shares remain unallocated.
+        if (saleLotIds.size === 1 && saleLotIds.has(lot.id)) {
+          if (sale.paymentStatus !== 'unpaid' && isFieldConfirmed(sale, 'grossCents')) grossConfirmedSalesCents += sale.grossCents
+          if (isFieldConfirmed(sale, 'receivedCents')) cashReceivedCents += receivedCashCents(sale)
+        }
+        continue
+      }
       lines.forEach((line, index) => {
         if (!itemIds.has(line.itemId)) return
         sold += Math.max(0, line.quantity - (line.returnedQuantity ?? 0))
-        if (sale.paymentStatus !== 'unpaid' && isFieldConfirmed(sale, 'grossCents')) grossConfirmedSalesCents += grossForLine(sale, index)
+        if (sale.paymentStatus !== 'unpaid' && isFieldConfirmed(sale, 'grossCents')) grossConfirmedSalesCents += grossForLine(sale, index) ?? 0
         if (isFieldConfirmed(sale, 'receivedCents')) {
           const weights = lines.map((entry) => lineNetProceedsCents(sale, entry))
           cashReceivedCents += allocateCents(receivedCashCents(sale), weights)[index] ?? 0
@@ -127,8 +140,9 @@ export function itemSales(data: TrackerData, item: InventoryItem): ItemSaleRecor
   const recorded = data.sales.flatMap((sale) => {
     const lines = sale.lines ?? []
     const lineIndexes = lines.map((line, index) => line.itemId === item.id ? index : -1).filter((index) => index >= 0)
-    const gross = lineIndexes.reduce((sum, index) => sum + grossForLine(sale, index), 0)
-    if (gross || sale.itemIds.includes(item.id)) return [{ sale, grossCents: lines.length ? gross : saleGrossForItem(sale, item.id), quantity: lines.filter((line) => line.itemId === item.id).reduce((sum, line) => sum + line.quantity, 0) || 1, proceedsAllocated: true }]
+    const unallocatedBundle = lines.length > 1 && lines.some((line) => line.proceedsCents === undefined)
+    const gross = unallocatedBundle ? sale.grossCents : lineIndexes.reduce((sum, index) => sum + (grossForLine(sale, index) ?? 0), 0)
+    if (gross || sale.itemIds.includes(item.id)) return [{ sale, grossCents: lines.length ? gross : saleGrossForItem(sale, item.id), quantity: lines.filter((line) => line.itemId === item.id).reduce((sum, line) => sum + line.quantity, 0) || 1, proceedsAllocated: !unallocatedBundle }]
     return []
   })
   const migrated = (data.ledgerTransactions ?? []).flatMap((entry) => {
@@ -161,7 +175,11 @@ export function realizedLotProfitCents(data: TrackerData, lotId: string): number
   const items = data.items.filter((item) => item.lotId === lotId)
   const itemIds = new Set(items.filter((item) => isFieldConfirmed(item, 'costCents')).map((item) => item.id))
   const externalIds = new Set(items.map((item) => item.externalId).filter((value): value is string => Boolean(value)))
-  const recorded = data.sales.filter((sale) => sale.status === 'completed' && isFieldConfirmed(sale, 'receivedCents') && ['paid', 'partial', 'refunded'].includes(sale.paymentStatus)).reduce((sum, sale) => sum + (sale.lines ?? []).filter((line) => itemIds.has(line.itemId)).reduce((lineSum, line) => lineSum + lineNetProceedsCents(sale, line) - line.allocatedCostCents, 0), 0)
+  const recorded = data.sales.filter((sale) => sale.status === 'completed' && isFieldConfirmed(sale, 'receivedCents') && ['paid', 'partial', 'refunded'].includes(sale.paymentStatus)).reduce((sum, sale) => {
+    const lines = sale.lines ?? []
+    if (lines.some((line) => line.proceedsCents === undefined)) return sum
+    return sum + lines.filter((line) => itemIds.has(line.itemId)).reduce((lineSum, line) => lineSum + lineNetProceedsCents(sale, line) - line.allocatedCostCents, 0)
+  }, 0)
   const imported = (data.ledgerTransactions ?? []).filter((entry) => ['cash_sale', 'buyback_payout'].includes(entry.type) && entry.paymentStatus === 'confirmed' && isFieldConfirmed(entry, 'receivedCents') && (entry.lotId === lotId || (entry.itemExternalIds ?? []).some((id) => externalIds.has(id))) && Boolean(entry.saleAllocatedCostCents?.length) && entry.saleAllocatedProceedsCents?.length === entry.saleAllocatedCostCents?.length).reduce((sum, entry) => sum + (entry.saleAllocatedProceedsCents ?? []).reduce((total, value, index) => total + (entry.saleCostVerified?.[index] ? value : 0), 0) - (entry.saleAllocatedCostCents ?? []).reduce((total, value, index) => total + (entry.saleCostVerified?.[index] ? value : 0), 0), 0)
   return recorded + imported
 }

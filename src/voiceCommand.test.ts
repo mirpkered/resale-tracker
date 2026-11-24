@@ -15,6 +15,55 @@ const fixture = (items = [item('vi', '30 — VI Music Video Collection'), item('
 })
 
 describe('voice command interpretation', () => {
+  it('recognizes the three named DVDs as one $9 total bundle proposal without inferring a platform', () => {
+    const data=fixture([
+      item('ace','Ace Ventura Collection — Pet Detective / When Nature Calls'),
+      item('lost','The Lost Boys Collection — The Lost Boys / Lost Boys: The Tribe'),
+      item('laugh','The Laugh Out Loud — 6-Movie Collection'),
+    ])
+    const before=JSON.stringify(data)
+    const result=analyzeVoiceCommand('I sold the Ace Ventura Collection DVD, The Lost Boys Collection DVD, and the Laugh Out Loud Six Movie Collection DVD as a bundle for nine dollars.',data,'voice-bundle-9')
+    expect(result.kind).toBe('sale')
+    if(result.kind!=='sale')return
+    expect(result.command.amountCents).toBe(900)
+    expect(result.command.amountMode).toBe('total')
+    expect(result.command.platform).toBeUndefined()
+    expect(result.targets.map((target)=>target.matched?.id)).toEqual(['ace','lost','laugh'])
+    expect(result.targets).toHaveLength(3)
+    expect(JSON.stringify(data)).toBe(before)
+    expect(data.sales).toHaveLength(0)
+  })
+
+  it('recognizes a two-item bundle and a count-prefixed three-title list',()=>{
+    const data=fixture([item('ace','Ace Ventura Collection'),item('lost','The Lost Boys Collection'),item('laugh','The Laugh Out Loud — 6-Movie Collection')])
+    const pair=analyzeVoiceCommand('Sold Ace Ventura Collection and The Lost Boys Collection together for $5.',data,'pair')
+    expect(pair).toMatchObject({kind:'sale',command:{amountCents:500,amountMode:'total'},targets:[{matched:{id:'ace'}},{matched:{id:'lost'}}]})
+    const triple=analyzeVoiceCommand('I sold three DVDs: Ace Ventura Collection, The Lost Boys Collection, and The Laugh Out Loud Six Movie Collection for $9 total.',data,'triple')
+    expect(triple).toMatchObject({kind:'sale',command:{amountCents:900,amountMode:'total'},targets:[{matched:{id:'ace'}},{matched:{id:'lost'}},{matched:{id:'laugh'}}]})
+  })
+
+  it('treats “both Final Fantasy 14 games” as two distinct titles, not two copies of one title',()=>{
+    const data=fixture([item('realm','Final Fantasy XIV: A Realm Reborn — PS3'),item('heavensward','Final Fantasy XIV: Heavensward — PS3')])
+    const result=analyzeVoiceCommand('I sold both of the Final Fantasy 14 games for PlayStation three as a bundle for $3.80 total.',data,'ff-bundle')
+    expect(result.kind).toBe('sale')
+    if(result.kind==='sale')expect(result.targets.map((target)=>target.matched?.id)).toEqual(['realm','heavensward'])
+  })
+
+  it('keeps unmatched and ambiguous bundle titles visible and unresolved',()=>{
+    const data=fixture([item('ace','Ace Ventura Collection'),item('lost-a','The Lost Boys Collection'),item('lost-b','The Lost Boys Collection')])
+    const missing=analyzeVoiceCommand('Sold Ace Ventura Collection and Missing Movie Collection as a bundle for $5.',data,'missing-bundle')
+    expect(missing.kind).toBe('sale')
+    if(missing.kind==='sale'){expect(missing.targets).toHaveLength(2);expect(missing.targets[0].matched?.id).toBe('ace');expect(missing.targets[1].matches).toHaveLength(0);expect(missing.ambiguous).toBe(true)}
+    const ambiguous=analyzeVoiceCommand('Sold The Lost Boys Collection for $5.',data,'ambiguous')
+    expect(ambiguous).toMatchObject({kind:'sale',matched:null,ambiguous:true})
+  })
+
+  it('does not match unavailable, archived, sold, or disposed inventory as saleable stock',()=>{
+    const data=fixture([item('retired','Ace Ventura Collection',{status:'completed',quantity:0}),item('archived','Other Title',{archived:true})])
+    const result=analyzeVoiceCommand('Sold Ace Ventura Collection for $5.',data,'unavailable')
+    expect(result.kind).toBe('unmatched')
+    if(result.kind==='unmatched')expect(result.suggestions.map((entry)=>entry.id)).toContain('retired')
+  })
   it('matches exact inventory and converts spoken dollars to cents', () => {
     const result = analyzeVoiceCommand('I sold VI Music for ten dollars on Vinted.', fixture(), 'cmd-1')
     expect(result.kind).toBe('sale')
@@ -50,6 +99,8 @@ describe('voice command interpretation', () => {
     expect(result.command.quantity).toBe(2)
     expect(result.command.amountMode).toBe('per_unit')
     expect(result.command.amountCents).toBe(400)
+    const explicit=analyzeVoiceCommand('Sold two copies of Nintendo game for four dollars per unit on Vinted.',data,'cmd-3-explicit')
+    expect(explicit).toMatchObject({kind:'sale',command:{amountMode:'per_unit',amountCents:400}})
   })
 
   it('extracts explicitly stated fees and shipping without polluting the matched title', () => {
