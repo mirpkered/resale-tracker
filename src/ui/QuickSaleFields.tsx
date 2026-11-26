@@ -4,6 +4,7 @@ import { dollarsToCents, formatMoney, isFieldConfirmed, PLATFORMS } from '../dom
 import { remainingAcquisitionCost } from '../lotView'
 import type { QuickSaleInitial } from '../quickSaleForm'
 import { defaultSellerShippingCents, estimateSellingFee, type AmazonFulfillment } from '../sellingFeeEstimates'
+import { localDateInputValue } from '../localDate'
 
 function moneyInput(cents: number | null | undefined) { return cents === null || cents === undefined ? '' : (cents / 100).toFixed(2) }
 
@@ -51,7 +52,7 @@ export function QuickSaleFields({ data, item, initial = {}, voiceConfirmation = 
   return <div className="quick-sale-editor">
     <div className="quick-sale-identity"><span className="eyebrow">ITEM BEING SOLD</span><h3>{item.title}</h3><p>{lot ? `${lot.name} · ${lot.date}` : 'Standalone acquisition'} · {quantity} of {item.quantity} available</p><p>Original asking price: {originalAsk ?? 'none confirmed'} · preserved after sale</p>{item.suggestedAskingCents? <p>Suggested price is not treated as a confirmed listing or sale.</p>:null}</div>
     <div className="quick-sale-allocation"><span>Allocated cost</span><b>{formatMoney(allocatedCostCents)}</b><span>Remaining unit cost basis for this sale</span></div>
-    <label>Sale date<input name="date" type="date" defaultValue={new Date().toISOString().slice(0, 10)} required/></label>
+    <label>Sale date<input name="date" type="date" defaultValue={localDateInputValue()} required/></label>
     <label>Selling platform<select name="platform" value={platform} onChange={(event) => { const next = event.currentTarget.value; setPlatform(next); setFeeOverride(false); setShipping(moneyInput(defaultSellerShippingCents(next,fulfillment)));const estimate=estimateSellingFee(next,totalGross||null,quantity,item.category,fulfillment);setFees(moneyInput(estimate.cents)) }} required><option value="">Choose platform</option>{platforms.map((entry) => <option key={entry.id} value={entry.name}>{entry.name}</option>)}</select></label>
     {platform.toLowerCase()==='amazon'&&<label>Amazon fulfillment<select value={fulfillment} onChange={(event)=>{const next=event.currentTarget.value as AmazonFulfillment;setFulfillment(next);setShipping(moneyInput(defaultSellerShippingCents(platform,next)))}}><option value="seller">Seller fulfilled</option><option value="fba">Fulfilled by Amazon</option></select></label>}
     <label>Quantity<input name="quantity" type="number" inputMode="numeric" min="1" max={item.quantity} value={quantity} onChange={(event) => {const next=Math.max(1, Math.min(item.quantity, Number(event.currentTarget.value) || 1));setQuantity(next);setAutoFee(platform,amount,next)}} required/></label>

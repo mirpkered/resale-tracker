@@ -1,4 +1,5 @@
 import { isFieldConfirmed, PLATFORMS, type LedgerTransaction, type PurchaseLot, type Sale, type TrackerData } from './domain'
+import { localDateInputValue } from './localDate'
 
 export type FinancialCommandAction = 'update_payout_amount' | 'mark_payout_received' | 'record_payout_received' | 'issue_store_credit' | 'record_cash_expense' | 'update_lot_expenses' | 'update_sale_expense'
 
@@ -166,7 +167,7 @@ export function analyzeFinancialCommand(text: string, data: TrackerData, command
   return { kind: 'financial', command, matches, sales, matchedLot, message }
 }
 
-export function applyFinancialCommand(data: TrackerData, command: FinancialCommand, amountCents: number, selectedRecordId?: string, markReceived = command.action === 'mark_payout_received', date = new Date().toISOString().slice(0,10)): { data: TrackerData; duplicate: boolean } {
+export function applyFinancialCommand(data: TrackerData, command: FinancialCommand, amountCents: number, selectedRecordId?: string, markReceived = command.action === 'mark_payout_received', date = localDateInputValue()): { data: TrackerData; duplicate: boolean } {
   if (!Number.isSafeInteger(amountCents) || amountCents < 0) throw new Error('Choose a valid non-negative amount before confirming.')
   const existingTransactions = data.ledgerTransactions ?? []
   const stableExternalId = `voice-v1-${stableHash(`${command.action}|${normalize(command.sourceText)}|${date}|${amountCents}`)}`

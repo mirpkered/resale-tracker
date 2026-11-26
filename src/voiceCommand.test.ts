@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { InventoryItem, TrackerData } from './domain'
-import { commandSaleDefaults, analyzeVoiceCommand, canProcessVoiceCommand, interpretVoiceTranscript, verifyVoiceCommandSession } from './voiceCommand'
+import { commandSaleDefaults, analyzeVoiceCommand, canProcessVoiceCommand, interpretVoiceTranscript, searchAvailableInventory, verifyVoiceCommandSession } from './voiceCommand'
 import { recordQuickSale } from './quickSale'
 
 const item = (id: string, title: string, overrides: Partial<InventoryItem> = {}): InventoryItem => ({
@@ -34,6 +34,26 @@ describe('voice command interpretation', () => {
     expect(data.sales).toHaveLength(0)
   })
 
+  it('segments the exact punctuation-free iPhone transcript against catalog titles', () => {
+    const data=fixture([
+      item('ace','Ace Ventura Collection — Pet Detective / When Nature Calls'),
+      item('lost','The Lost Boys Collection — The Lost Boys: The Tribe'),
+      item('laugh','The Laugh Out Loud — 6-Movie Collection'),
+      item('sixth','The Sixth Sense'),
+      item('unrelated','Movie Collection: Six Classic Films'),
+    ])
+    const before=JSON.stringify(data)
+    const result=analyzeVoiceCommand('I sold the ace Ventura two movie collection the sixth film laugh out loud collection and The Lost Boys two film collection as a bundle for nine dollars',data,'iphone-no-punctuation')
+    expect(result.kind).toBe('sale')
+    if(result.kind!=='sale')return
+    expect(result.targets.map((target)=>target.matched?.id)).toEqual(['ace','laugh','lost'])
+    expect(result.targets.map((target)=>target.quantity)).toEqual([1,1,1])
+    expect(result.command.amountCents).toBe(900)
+    expect(result.command.amountMode).toBe('total')
+    expect(JSON.stringify(data)).toBe(before)
+    expect(data.sales).toHaveLength(0)
+  })
+
   it('recognizes a two-item bundle and a count-prefixed three-title list',()=>{
     const data=fixture([item('ace','Ace Ventura Collection'),item('lost','The Lost Boys Collection'),item('laugh','The Laugh Out Loud — 6-Movie Collection')])
     const pair=analyzeVoiceCommand('Sold Ace Ventura Collection and The Lost Boys Collection together for $5.',data,'pair')
@@ -63,6 +83,21 @@ describe('voice command interpretation', () => {
     const result=analyzeVoiceCommand('Sold Ace Ventura Collection for $5.',data,'unavailable')
     expect(result.kind).toBe('unmatched')
     if(result.kind==='unmatched')expect(result.suggestions.map((entry)=>entry.id)).toContain('retired')
+  })
+  it('supports manual inventory search even when automatic suggestions are empty, across lots',()=>{
+    const data=fixture([item('inactive','Hidden Choice',{status:'completed',quantity:0}),item('archive','Archive Choice',{archived:true})])
+    data.lots.push({id:'other-lot',name:'Other Purchase',date:'2026-11-02',source:'Yard sale',purchaseCents:100,expensesCents:0})
+    data.items.push(item('manual','Exact title for manual correction',{lotId:'other-lot'}))
+    expect(analyzeVoiceCommand('Sold unknown mystery title for $3 as a bundle.',data,'manual-empty')).toMatchObject({kind:'sale',targets:[{matches:[]} ]})
+    expect(searchAvailableInventory(data,'Exact title')).toMatchObject([{id:'manual',lotId:'other-lot'}])
+    expect(searchAvailableInventory(data,'Hidden Choice')).toHaveLength(0)
+    expect(searchAvailableInventory(data,'Archive Choice')).toHaveLength(0)
+  })
+  it('never selects an item using only generic media words',()=>{
+    const data=fixture([item('generic','Ace Ventura Movie Collection')])
+    const result=analyzeVoiceCommand('Sold movie collection for $5 as a bundle.',data,'generic-only')
+    expect(result.kind).toBe('sale')
+    if(result.kind==='sale')expect(result.targets[0]).toMatchObject({matched:null,matches:[]})
   })
   it('matches exact inventory and converts spoken dollars to cents', () => {
     const result = analyzeVoiceCommand('I sold VI Music for ten dollars on Vinted.', fixture(), 'cmd-1')

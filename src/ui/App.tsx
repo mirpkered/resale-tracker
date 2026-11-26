@@ -16,6 +16,7 @@ import { QuickSaleFields } from './QuickSaleFields'
 import { VoiceCommandDialog } from './VoiceCommandDialog'
 import { FinancialDetail, type DashboardDetailKind } from './FinancialDetail'
 import { applyFinancialCommand, type FinancialCommand } from '../financialVoiceCommand'
+import { localDateInputValue } from '../localDate'
 import { parseAppRoute, routeHash } from '../navigation'
 import { archiveEligibility, archiveInventoryItem, deleteInventoryItem, deletionEligibility, restoreInventoryItem } from '../itemLifecycle'
 
@@ -24,7 +25,7 @@ type SettingsView = 'home' | 'reports' | 'data' | 'transactions'
 const nav: { name: Section; icon: typeof Home }[] = [
   { name: 'Dashboard', icon: Home }, { name: 'Lots', icon: Layers3 }, { name: 'Listings', icon: Tag }, { name: 'Settings', icon: Settings2 },
 ]
-const today = new Date().toISOString().slice(0, 10)
+const today = localDateInputValue()
 export default function App() {
   const [section, setSection] = useState<Section>(() => parseAppRoute(window.location.hash).section)
   const [settingsView, setSettingsView] = useState<SettingsView>('home')

@@ -150,6 +150,8 @@ function saleItemQueries(text: string, amountMatch: { value: string; index: numb
     .replace(/\b(?:total|altogether)\b/gi, ' ')
     .replace(/[.!?]+$/g, '')
     .trim()
+  const inventorySegments = segmentAgainstInventory(clause, data)
+  if (inventorySegments.length && !/\bboth\b/i.test(clause)) return inventorySegments
   const parts = clause.split(/[,;]|\s+and\s+/i).map((part) => part.replace(/^\s*(?:and|the bundle of)\s+/i, '').replace(/\s+$/,'').trim())
   const cleaned = parts.map((part) => cleanItemQuery(part).replace(/\b(?:dvds?|blu[ -]?ray|movie|game|bundle|together|both|each|total)\b/gi, ' ').replace(/\s+/g,' ').trim()).filter(Boolean)
   if (cleaned.length > 1) return cleaned
@@ -167,6 +169,62 @@ function saleItemQueries(text: string, amountMatch: { value: string; index: numb
     if (candidates.length >= 2 && new Set(candidates.map((entry) => normalize(entry.item.title))).size >= 2) return candidates.map((entry) => entry.item.title)
   }
   return one ? [one] : []
+}
+
+const TITLE_FILLER = new Set(['the','a','an','of','and','for','my','copy','item','this','dvd','bluray','blu','ray','movie','movies','film','films','game','games','collection','collections','set','edition','complete','season','disc','special','screen','widescreen','full','two','three','four','five','six','seven','eight','nine','one','first','second','third','fourth','fifth','sixth','seventh','eighth','ninth','1','2','3','4','5','6','7','8','9'])
+const SPEECH_TOKEN_EQUIVALENTS: Record<string,string> = { sixth:'6', fifth:'5', fourth:'4', third:'3', second:'2', first:'1', films:'film', movies:'movie' }
+
+/**
+ * Find short, non-overlapping title spans using distinctive words from currently
+ * saleable catalog titles. Generic media words and spoken numbers provide
+ * context but cannot identify a product on their own.
+ */
+function segmentAgainstInventory(clause: string, data: TrackerData): string[] {
+  const words = clause.toLowerCase().match(/[a-z0-9]+/g) ?? []
+  if (words.length < 2) return []
+  const candidates: { start:number; end:number; query:string; score:number; anchorCount:number }[] = []
+  for (const item of activeItems(data).filter((entry) => availableQuantity(data, entry) > 0)) {
+    const anchors = [...new Set(normalize(item.title).split(' ').filter((token) => token.length > 1 && !TITLE_FILLER.has(token)))]
+    if (!anchors.length) continue
+    const itemHasSingleAnchor = anchors.length === 1
+    for (let start=0; start<words.length; start++) {
+      for (let end=start+1; end<Math.min(words.length,start+8); end++) {
+        const spanWords = words.slice(start,end+1).map((word) => SPEECH_TOKEN_EQUIVALENTS[word] ?? word)
+        const spanCore = spanWords.filter((word) => word.length > 1 && !TITLE_FILLER.has(word))
+        if (!spanCore.length) continue
+        const matched = anchors.filter((anchor) => spanWords.includes(anchor))
+        const coverage = matched.length / anchors.length
+        const precision = matched.length / spanCore.length
+        if (itemHasSingleAnchor) {
+          if (coverage < 1 || spanCore.length > 2) continue
+        } else if (matched.length < 2 || coverage < 0.25 || precision < 0.55) continue
+        // Prefer strong title coverage, then short spans. This makes “sixth film”
+        // harmless context around the distinctive “laugh out loud” anchors.
+        const score = coverage * 10 + precision * 3 + matched.length - (end-start) * 0.08
+        candidates.push({start,end,query:spanCore.join(' '),score,anchorCount:matched.length})
+      }
+    }
+  }
+  const picked: typeof candidates = []
+  for (const candidate of candidates.sort((a,b)=>b.score-a.score || (a.end-a.start)-(b.end-b.start))) {
+    if (picked.some((entry)=>candidate.start<=entry.end && candidate.end>=entry.start)) continue
+    picked.push(candidate)
+  }
+  picked.sort((a,b)=>a.start-b.start)
+  if (!picked.length) return []
+  // Keep meaningful unclaimed words as an unresolved target. This prevents a
+  // partially recognized request from silently becoming a smaller sale.
+  const claimed = new Set<number>()
+  for (const entry of picked) for (let index=entry.start;index<=entry.end;index++) claimed.add(index)
+  const leftovers:string[]=[]
+  let pending:string[]=[]
+  for(let index=0;index<words.length;index++) {
+    if(claimed.has(index)) { if(pending.length)leftovers.push(pending.join(' '));pending=[];continue }
+    const word=words[index]
+    if(!TITLE_FILLER.has(word) && !['i','sold','sell','selling','as','bundle','together','total','altogether','both','all','for','on','at','with'].includes(word))pending.push(word)
+  }
+  if(pending.length)leftovers.push(pending.join(' '))
+  return [...picked.map((entry)=>entry.query),...leftovers].filter(Boolean)
 }
 
 function availableQuantity(data: TrackerData, item: InventoryItem): number {
@@ -195,6 +253,25 @@ function parseSale(text: string, platforms: TrackerData['platforms'], commandId:
 }
 
 function activeItems(data: TrackerData) { return data.items.filter((item) => ACTIVE_STATUSES.includes(item.status) && item.quantity > 0 && !item.archived) }
+
+function queryHasSpecificTitleAnchor(query:string,item:InventoryItem,data:TrackerData):boolean {
+  const queryTokens=normalize(query).split(' ').filter((token)=>token.length>1&&!TITLE_FILLER.has(token))
+  if(!queryTokens.length)return false
+  const titleTokens=new Set(normalize(item.title).split(' ').filter((token)=>token.length>1&&!TITLE_FILLER.has(token)))
+  const overlap=queryTokens.filter((token)=>titleTokens.has(token)).length
+  if(queryTokens.length>1)return overlap>=2
+  if(!titleTokens.has(queryTokens[0]))return false
+  const sameAnchorMatches=activeItems(data).filter((candidate)=>normalize(candidate.title).split(' ').includes(queryTokens[0]))
+  return sameAnchorMatches.length===1||new Set(sameAnchorMatches.map((entry)=>normalize(entry.title))).size===1||normalize(item.title)===normalize(query)
+}
+
+/** Inventory search used by manual bundle correction; deliberately broader than automatic matching. */
+export function searchAvailableInventory(data: TrackerData, query: string): InventoryItem[] {
+  const needle=normalize(query)
+  if(!needle)return []
+  return activeItems(data).filter((item)=>availableQuantity(data,item)>0 && (normalize(`${item.title} ${data.lots.find((lot)=>lot.id===item.lotId)?.name??''}`).includes(needle) || matchScore(query,item)>=0.3))
+    .sort((a,b)=>a.title.localeCompare(b.title)||a.id.localeCompare(b.id))
+}
 
 const AVAILABLE_COUNT_STATUSES = new Set(['acquired', 'draft', 'active', 'reserved', 'returned'])
 const SOLD_COUNT_STATUSES = new Set(['awaiting_payment', 'awaiting_fulfillment', 'completed'])
@@ -304,7 +381,7 @@ export function analyzeVoiceCommand(text: string, data: TrackerData, commandId: 
     // Strong matches are candidates for sale. Lower-overlap matches remain
     // suggestions only; common words such as “movie collection” must not turn
     // an unrelated title into a saleable match.
-    const ranked = activeItems(data).map((item) => ({ item, score: matchScore(query, item) })).filter((entry) => availableQuantity(data, entry.item) > 0 && entry.score >= 0.82).sort((a, b) => b.score - a.score)
+    const ranked = activeItems(data).map((item) => ({ item, score: matchScore(query, item) })).filter((entry) => availableQuantity(data, entry.item) > 0 && entry.score >= 0.82 && queryHasSpecificTitleAnchor(query,entry.item,data)).sort((a, b) => b.score - a.score)
     const bestScore = ranked[0]?.score ?? 0
     const confident = ranked.filter((entry) => bestScore - entry.score < 0.1)
     const matches = confident.map((entry) => entry.item)
@@ -314,7 +391,7 @@ export function analyzeVoiceCommand(text: string, data: TrackerData, commandId: 
   })
   const first = targets[0]
   const matches = first?.matches ?? []
-  if (targets.length === 1 && !matches.length) {
+  if (targets.length === 1 && !matches.length && !/\bbundle\b|\btogether\b/i.test(input)) {
     const suggestions = first?.suggestions ?? []
     return { kind: 'unmatched', query: command.itemQuery, suggestions, message: suggestions.length ? 'No available exact match. Review these possible records; unavailable items cannot be sold.' : 'No reliable inventory match. No item or sale was created.' }
   }

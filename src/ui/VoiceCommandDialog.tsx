@@ -5,12 +5,13 @@ import { ACTIVE_STATUSES, dollarsToCents, formatMoney, PLATFORMS } from '../doma
 import { QuickSaleFields } from './QuickSaleFields'
 import type { QuickSaleInitial } from '../quickSaleForm'
 import { voiceSaleInitial } from '../quickSaleForm'
-import { canProcessVoiceCommand, interpretVoiceTranscript, verifyVoiceCommandSession, type VoiceAnalysis, type VoiceSaleTarget } from '../voiceCommand'
+import { canProcessVoiceCommand, interpretVoiceTranscript, searchAvailableInventory, verifyVoiceCommandSession, type VoiceAnalysis, type VoiceSaleTarget } from '../voiceCommand'
 import type { QuickSaleInput } from '../quickSale'
 import { remainingAcquisitionCost } from '../lotView'
 import { attachSpeechLifecycle, browserSpeechRecognitionAvailable, createSpeechCommandSession, type SpeechRecognizer, type SpeechWindow } from '../speechRecognition'
 import { formatSpeechDiagnosticReport, type SpeechDiagnosticEvent } from '../speechDiagnostics'
 import { currentFinancialAmount, type FinancialCommandAnalysis, type FinancialCommand } from '../financialVoiceCommand'
+import { localDateInputValue } from '../localDate'
 export function VoiceCommandDialog({ data, authenticated, verifySession, onClose, onConfirmSale, onConfirmFinancial, onOpenLot }: {
   data: TrackerData
   authenticated: boolean
@@ -25,6 +26,9 @@ export function VoiceCommandDialog({ data, authenticated, verifySession, onClose
   const [analysis, setAnalysis] = useState<VoiceAnalysis | null>(null)
   const [selectedItemId, setSelectedItemId] = useState('')
   const [selectedBundleItemIds, setSelectedBundleItemIds] = useState<Record<number,string>>({})
+  const [editableBundleTargets, setEditableBundleTargets] = useState<VoiceSaleTarget[]>([])
+  const [bundleSearches, setBundleSearches] = useState<Record<number,string>>({})
+  const [bundleQuantities, setBundleQuantities] = useState<Record<number,number>>({})
   const [bundleDetailsValid, setBundleDetailsValid] = useState(false)
   const [error, setError] = useState('')
   const [interimTranscript, setInterimTranscript] = useState('')
@@ -81,15 +85,20 @@ export function VoiceCommandDialog({ data, authenticated, verifySession, onClose
     return null
   }, [analysis, choices, selectedItemId, selectedBundleItemIds])
   const initial: QuickSaleInitial | undefined = command && resolvedItem ? voiceSaleInitial(command, resolvedItem) : undefined
-  const saleTargets = analysis?.kind === 'sale' ? analysis.targets : []
+  const saleTargets = analysis?.kind === 'sale' ? editableBundleTargets : []
+  const bundleProposal = Boolean(command && (/\bbundle\b|\btogether\b/i.test(command.sourceText) || saleTargets.length > 1))
   const selectedBundleItems = saleTargets.map((target,index) => {
     const id = selectedBundleItemIds[index] || target.matched?.id || ''
-    return { target, item: target.matches.find((candidate)=>candidate.id===id) ?? null }
+    const item=data.items.find((candidate)=>candidate.id===id)
+    const tracked=(data.units??[]).filter((unit)=>unit.itemId===id)
+    const sold=new Set(data.sales.flatMap((sale)=>(sale.lines??[]).flatMap((line)=>(line.unitIds??[]).slice(line.returnedQuantity??0))))
+    const available=item&&!item.archived&&ACTIVE_STATUSES.includes(item.status)?(tracked.length?tracked.filter((unit)=>ACTIVE_STATUSES.includes(unit.status)&&!sold.has(unit.id)).length:item.quantity):0
+    return { target: {...target,quantity:bundleQuantities[index]??target.quantity}, item: item&&available>=(bundleQuantities[index]??target.quantity)?item:null }
   })
   const bundleSelections = selectedBundleItems.filter((entry):entry is {target:VoiceSaleTarget;item:InventoryItem}=>Boolean(entry.item)).map(({target,item})=>({itemId:item.id,quantity:target.quantity}))
   const selectionCounts = new Map<string,number>()
   for(const selection of bundleSelections)selectionCounts.set(selection.itemId,(selectionCounts.get(selection.itemId)??0)+selection.quantity)
-  const bundleSelectionValid = selectedBundleItems.length>1&&selectedBundleItems.every((entry)=>Boolean(entry.item))&&[...selectionCounts].every(([id,quantity])=>{
+  const bundleSelectionValid = bundleProposal&&selectedBundleItems.length>0&&selectedBundleItems.every((entry)=>Boolean(entry.item))&&[...selectionCounts].every(([id,quantity])=>{
     const item=data.items.find((candidate)=>candidate.id===id)
     if(!item||item.archived||!ACTIVE_STATUSES.includes(item.status)||item.quantity<quantity)return false
     const tracked=(data.units??[]).filter((unit)=>unit.itemId===id)
@@ -99,10 +108,10 @@ export function VoiceCommandDialog({ data, authenticated, verifySession, onClose
   })
 
   useEffect(() => {
-    if (analysis?.kind !== 'sale' || analysis.targets.length < 2) { setBundleDetailsValid(false); return }
+    if (analysis?.kind !== 'sale' || !bundleProposal) { setBundleDetailsValid(false); return }
     const frame = window.requestAnimationFrame(() => setBundleDetailsValid(Boolean(formRef.current?.checkValidity())))
     return () => window.cancelAnimationFrame(frame)
-  }, [analysis, selectedBundleItemIds])
+  }, [analysis, selectedBundleItemIds, editableBundleTargets, bundleProposal])
 
   useEffect(() => {
     mountedRef.current = true
@@ -127,6 +136,7 @@ export function VoiceCommandDialog({ data, authenticated, verifySession, onClose
       if (requestId !== interpretationRef.current) return
       setAnalysis(result); setSelectedItemId(result.kind === 'sale' && result.matched ? result.matched.id : '')
       setSelectedBundleItemIds(result.kind==='sale'?Object.fromEntries(result.targets.map((target,index)=>[index,target.matched?.id??''])):{})
+      setEditableBundleTargets(result.kind==='sale'?result.targets:[]);setBundleSearches({});setBundleQuantities({})
       setDetailsOpen(true)
       setPhase('result')
       if (result.kind === 'financial') {
@@ -263,8 +273,8 @@ export function VoiceCommandDialog({ data, authenticated, verifySession, onClose
   const confirmSale = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     if (!command || analysis?.kind!=='sale' || confirmingRef.current) return
-    const multi = analysis.targets.length>1
-    if (multi ? !bundleSelectionValid : !resolvedItem) { setError('Choose an available inventory record for every title before confirming.');return }
+    const multi = bundleProposal
+    if ((bundleProposal ? !bundleSelectionValid : !resolvedItem)) { setError('Choose an available inventory record for every title before confirming.');return }
     confirmingRef.current = true; setPhase('processing'); setError('')
     try {
       await verifyVoiceCommandSession(authenticated, verifySession)
@@ -346,16 +356,19 @@ export function VoiceCommandDialog({ data, authenticated, verifySession, onClose
       {analysis?.kind === 'open_lot'&&<section className="voice-result"><h3>Purchase lot</h3><p>{analysis.message}</p><button className="primary" onClick={()=>onOpenLot(analysis.lotId)}>Open {analysis.lotName}</button></section>}
       {analysis?.kind === 'financial'&&<FinancialVoiceProposal analysis={analysis} amount={financialAmount} setAmount={setFinancialAmount} selectedRecordId={selectedFinancialRecordId} setSelectedRecordId={(id)=>{setSelectedFinancialRecordId(id);const amount=currentFinancialAmount(analysis,id||undefined);setFinancialAmount(amount===undefined?'':(amount/100).toFixed(2))}} received={financialReceived} setReceived={setFinancialReceived} onSubmit={confirmFinancial} busy={busy} data={data}/>}
       {analysis?.kind === 'unmatched'&&<section className="voice-result"><h3>No reliable available match</h3><p>{analysis.message}</p>{choices.length>0&&<VoiceItemChoices items={choices} data={data} selectedId={selectedItemId} onChoose={chooseItem}/>}</section>}
-      {analysis?.kind === 'sale'&&<section className="voice-result"><h3>{saleTargets.length>1?'Proposed bundle sale · not saved':'Proposed sale · not saved'}</h3>
-        {saleTargets.length>1&&<p className="bundle-total-callout">One total price applies to the complete bundle. Individual item proceeds will remain unallocated unless you later provide verified item shares.</p>}
-        <div className="voice-sale-target-list">{saleTargets.map((target,index)=><SaleTargetPicker key={`${command!.commandId}-${index}`} target={target} index={index} data={data} selectedId={selectedBundleItemIds[index]||target.matched?.id||''} onChange={(id)=>{setSelectedBundleItemIds((previous)=>({...previous,[index]:id}));if(index===0)setSelectedItemId(id)}}/> )}</div>
-        {saleTargets.length===1&&resolvedItem&&<form ref={formRef} className="form-grid voice-sale-form" onSubmit={confirmSale}>
+      {analysis?.kind === 'sale'&&<section className="voice-result"><h3>{bundleProposal?'Proposed bundle sale · not saved':'Proposed sale · not saved'}</h3>
+        {bundleProposal&&<p className="bundle-total-callout">One total price applies to the complete bundle. Individual item proceeds remain unallocated unless you later provide verified item shares.</p>}
+        <p className="voice-required-note">Original command: <q>{command!.sourceText}</q> · {saleTargets.length} title target{saleTargets.length===1?'':'s'} · {selectedBundleItems.filter((entry)=>entry.item).length} matched · {selectedBundleItems.filter((entry)=>!entry.item).length} unresolved</p>
+        <div className="voice-sale-target-list">{saleTargets.map((target,index)=><SaleTargetPicker key={`${command!.commandId}-${index}`} target={target} index={index} data={data} selectedId={selectedBundleItemIds[index]||target.matched?.id||''} search={bundleSearches[index]??''} onSearch={(value)=>setBundleSearches((previous)=>({...previous,[index]:value}))} quantity={bundleQuantities[index]??target.quantity} onQuantity={(quantity)=>setBundleQuantities((previous)=>({...previous,[index]:quantity}))} onChange={(id)=>{setSelectedBundleItemIds((previous)=>({...previous,[index]:id}));if(index===0)setSelectedItemId(id)}} onRemove={bundleProposal?()=>{setEditableBundleTargets((previous)=>previous.filter((_entry,targetIndex)=>targetIndex!==index));setSelectedBundleItemIds((previous)=>Object.fromEntries(Object.entries(previous).filter(([key])=>Number(key)!==index).map(([key,value])=>[Number(key)>index?String(Number(key)-1):key,value])));setBundleSearches((previous)=>Object.fromEntries(Object.entries(previous).filter(([key])=>Number(key)!==index).map(([key,value])=>[Number(key)>index?String(Number(key)-1):key,value])));setBundleQuantities((previous)=>Object.fromEntries(Object.entries(previous).filter(([key])=>Number(key)!==index).map(([key,value])=>[Number(key)>index?String(Number(key)-1):key,value]))) }:undefined}/> )}</div>
+        {bundleProposal&&<button type="button" className="secondary" onClick={()=>setEditableBundleTargets((previous)=>[...previous,{query:'Additional item',quantity:1,matches:[],suggestions:[],matched:null,ambiguous:true}])}>Add another item</button>}
+        {!selectedBundleItems.some((entry)=>entry.item)&&bundleProposal&&<p className="voice-error" role="status">Bundle incomplete — no inventory items matched yet. Search inventory below to add or match an item.</p>}
+        {!bundleProposal&&saleTargets.length===1&&resolvedItem&&<form ref={formRef} className="form-grid voice-sale-form" onSubmit={confirmSale}>
           <div className="voice-proposal full"><div><span>Marketplace</span><b>{previewValues?.platform||'Choose before confirming'}</b></div><div><span>Sale amount</span><b>{previewValues?.amountCents===null||previewValues?.amountCents===undefined?'Enter or confirm amount':formatMoney(previewValues.amountCents)}{command!.amountMode==='per_unit'?' each':''}</b></div><div><span>Quantity</span><b>{command!.quantity}</b></div></div>
           <details className="voice-edit-details full" open={detailsOpen} onToggle={(event) => setDetailsOpen((event.currentTarget as HTMLDetailsElement).open)}><summary>Edit Details</summary><QuickSaleFields key={`${resolvedItem.id}:${command!.commandId}`} data={data} item={resolvedItem} initial={initial} voiceConfirmation/></details>
           <div className="voice-sale-actions full"><button type="button" className="secondary" onClick={closeDialog}>Cancel</button><button type="submit" className="primary" disabled={phase==='processing'||!previewValues?.platform}>{phase==='processing'?'Checking sign-in…':'Confirm Sale'}</button></div>
           <small className="voice-required-note full">A spoken “sold” does not confirm payout. Select Payment has been received only if the money is in your account. No sale is saved until you tap Confirm Sale.</small>
         </form>}
-        {saleTargets.length>1&&<form ref={formRef} className="form-grid voice-sale-form" onInput={(event)=>setBundleDetailsValid(event.currentTarget.checkValidity())} onSubmit={confirmSale}>
+        {bundleProposal&&<form ref={formRef} className="form-grid voice-sale-form" onInput={(event)=>setBundleDetailsValid(event.currentTarget.checkValidity())} onSubmit={confirmSale}>
           <BundleSaleFields key={command!.commandId} data={data} command={command!} selections={selectedBundleItems.filter((entry):entry is {target:VoiceSaleTarget;item:InventoryItem}=>Boolean(entry.item)).map((entry)=>({item:entry.item,quantity:entry.target.quantity}))}/>
           <div className="voice-sale-actions full"><button type="button" className="secondary" onClick={closeDialog}>Cancel</button><button type="submit" className="primary" disabled={phase==='processing'||!bundleSelectionValid||!bundleDetailsValid}>{phase==='processing'?'Checking sign-in…':'Confirm Sale'}</button></div>
           <small className="voice-required-note full">Confirm every title, its lot, the marketplace, shared expenses, and payment status. Unmatched, ambiguous, unavailable, or duplicate selections must be resolved first.</small>
@@ -366,15 +379,19 @@ export function VoiceCommandDialog({ data, authenticated, verifySession, onClose
   </div>
 }
 
-function SaleTargetPicker({target,data,index,selectedId,onChange}:{target:VoiceSaleTarget;data:TrackerData;index:number;selectedId:string;onChange:(id:string)=>void}){
-  const selected=target.matches.find((item)=>item.id===selectedId)
+function SaleTargetPicker({target,data,index,selectedId,search,onSearch,quantity,onQuantity,onChange,onRemove}:{target:VoiceSaleTarget;data:TrackerData;index:number;selectedId:string;search:string;onSearch:(value:string)=>void;quantity:number;onQuantity:(value:number)=>void;onChange:(id:string)=>void;onRemove?:()=>void}){
+  const selected=data.items.find((item)=>item.id===selectedId&&!item.archived&&ACTIVE_STATUSES.includes(item.status)&&item.quantity>0)
   const lot=selected?data.lots.find((entry)=>entry.id===selected.lotId):undefined
-  const suggestions=target.suggestions.filter((item)=>!target.matches.some((match)=>match.id===item.id)).slice(0,3)
+  const alreadySold=new Set(data.sales.flatMap((sale)=>(sale.lines??[]).flatMap((line)=>(line.unitIds??[]).slice(line.returnedQuantity??0))))
+  const available=(item:InventoryItem)=>{if(item.archived||!ACTIVE_STATUSES.includes(item.status)||item.quantity<1)return 0;const units=(data.units??[]).filter((unit)=>unit.itemId===item.id);return units.length?units.filter((unit)=>ACTIVE_STATUSES.includes(unit.status)&&!alreadySold.has(unit.id)).length:item.quantity}
+  const results=search.trim()?searchAvailableInventory(data,search).slice(0,20):[]
   return <article className={`voice-sale-target ${selected?'matched':'unmatched'}`}>
     <div className="voice-sale-target-heading"><span>{index+1}. Spoken title</span><b>{target.query}</b></div>
-    {target.matches.length>1?<label>Choose matching available record<select aria-label={`Match for ${target.query}`} value={selectedId} onChange={(event)=>onChange(event.currentTarget.value)}><option value="">Select an item</option>{target.matches.map((item)=><option key={item.id} value={item.id}>{item.title} · {data.lots.find((entry)=>entry.id===item.lotId)?.name??'Standalone'} · {item.quantity} available</option>)}</select></label>:selected?<div className="voice-sale-target-match"><b>{selected.title}</b><span>{lot?.name??'Standalone acquisition'} · {target.quantity} unit{target.quantity===1?'':'s'} · {selected.quantity} available</span></div>:<div className="voice-error" role="status">No reliable available match for “{target.query}”. This title cannot be included until matched to available inventory.</div>}
-    {target.matches.length>1&&!selected&&<small className="voice-required-note">Select the exact record. Confirmation is disabled until each spoken title is matched.</small>}
-    {suggestions.length>0&&<details className="voice-unavailable-suggestions"><summary>Possible records (not eligible unless available)</summary>{suggestions.map((item)=><span key={item.id}>{item.title} · {data.lots.find((entry)=>entry.id===item.lotId)?.name??'Standalone'} · {item.status} · {item.quantity} available</span>)}</details>}
+    {selected?<div className="voice-sale-target-match"><b>{selected.title}</b><span>{lot?.name??'Standalone acquisition'} · {quantity} unit{quantity===1?'':'s'} · {available(selected)} available · {selected.platform||'unlisted'}</span></div>:<div className="voice-error" role="status">No available item selected for “{target.query}”. Search every purchase lot below.</div>}
+    <label>Search inventory across all lots<input type="search" value={search} onChange={(event)=>onSearch(event.currentTarget.value)} placeholder="Search title or purchase lot" aria-label={`Search inventory for ${target.query}`}/></label>
+    {search.trim()&&<label>Choose the correct item<select aria-label={`Inventory match for ${target.query}`} value={selectedId} onChange={(event)=>onChange(event.currentTarget.value)}><option value="">Select an available item</option>{results.map((item)=><option key={item.id} value={item.id}>{item.title} · {data.lots.find((entry)=>entry.id===item.lotId)?.name??'Standalone'} · {available(item)} available · {item.status} · {item.platform||'unlisted'}</option>)}</select></label>}
+    {selected&&<label>Quantity<input aria-label={`Quantity for ${selected.title}`} type="number" min="1" max={available(selected)} value={quantity} onChange={(event)=>onQuantity(Math.max(1,Number(event.currentTarget.value)||1))}/></label>}
+    {onRemove&&<button type="button" className="secondary" onClick={onRemove}>Remove item from bundle</button>}
   </article>
 }
 
@@ -392,8 +409,8 @@ function BundleSaleFields({data,command,selections}:{data:TrackerData;command:No
   const cost=selections.reduce((sum,{item,quantity:count})=>{const availableCost=remainingAcquisitionCost(data,item);return sum+(count===item.quantity?availableCost:Math.floor(availableCost*count/Math.max(item.quantity,1)))},0)
   const net=(()=>{try{if(!amount||!fees||!shipping||!other)return null;const value=gross-dollarsToCents(fees)-dollarsToCents(shipping)-dollarsToCents(other);return value>=0?value:null}catch{return null}})()
   return <>
-    <div className="bundle-selected-items full"><b>Bundle contents · {quantity} physical item{quantity===1?'':'s'}</b>{selections.map(({item,quantity:count})=><span key={item.id}>{item.title} — {data.lots.find((lot)=>lot.id===item.lotId)?.name??'Standalone acquisition'} · {count} unit{count===1?'':'s'} · allocated cost {formatMoney(remainingAcquisitionCost(data,item))}</span>)}<small>Estimated combined cost basis {formatMoney(cost)}. Individual profit is not shown because the $ bundle proceeds have no verified item-level split.</small></div>
-    <label>Sale date<input name="date" type="date" defaultValue={new Date().toISOString().slice(0,10)} required/></label>
+    <div className="bundle-selected-items full"><b>{quantity?`Bundle contents · ${quantity} physical item${quantity===1?'':'s'}`:'Bundle incomplete'}</b>{selections.map(({item,quantity:count})=><span key={item.id}>{item.title} — {data.lots.find((lot)=>lot.id===item.lotId)?.name??'Standalone acquisition'} · {count} unit{count===1?'':'s'} · allocated cost {formatMoney(remainingAcquisitionCost(data,item))}</span>)}{quantity>0&&<small>Estimated combined cost basis {formatMoney(cost)}. Individual profit is not shown because the bundle proceeds have no verified item-level split.</small>}</div>
+    <label>Sale date<input name="date" type="date" defaultValue={localDateInputValue()} required/></label>
     <label>Selling platform<select name="platform" value={platform} onChange={(event)=>{const next=event.currentTarget.value;setPlatform(next);setFees(next.toLowerCase()==='vinted'?'0.00':'');setShipping(next.toLowerCase()==='vinted'?'0.00':'')}} required><option value="">Choose marketplace</option>{platforms.map((entry)=><option key={entry.id} value={entry.name}>{entry.name}</option>)}</select><small>Choose the marketplace used for this whole bundle; item listing platforms are not assumed.</small></label>
     <label>Price entry<select value={amountMode} onChange={(event)=>setAmountMode(event.currentTarget.value as 'total'|'per_unit')}><option value="total">Total for entire bundle</option><option value="per_unit">Same price per physical item</option></select></label>
     <label>{amountMode==='total'?'Total bundle sale price':'Sale price per item'}<input inputMode="decimal" type="number" min="0" step="0.01" value={amount} onChange={(event)=>setAmount(event.currentTarget.value)} required placeholder="0.00"/><small>{amountMode==='per_unit'?`Bundle gross ${formatMoney(gross)} · ${quantity} items`:'This amount is counted once across all sale lines.'}</small></label>
