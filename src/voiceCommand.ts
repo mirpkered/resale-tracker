@@ -111,6 +111,14 @@ function matchScore(query: string, item: InventoryItem): number {
   return overlap >= 0.8 && tokens.length >= 2 ? 0.82 + overlap * 0.1 : overlap
 }
 
+function saleTitleMatchScore(query:string,item:InventoryItem):number {
+  const score=matchScore(query,item)
+  const queryNumbers: string[]=normalize(query).match(/\b\d+\b/g)??[]
+  const itemNumbers: string[]=normalize(item.title).match(/\b\d+\b/g)??[]
+  if(queryNumbers.length&&!queryNumbers.some((number)=>itemNumbers.includes(number)))return Math.max(0,score-(itemNumbers.length?0.3:0.15))
+  return score
+}
+
 function cleanItemQuery(text: string, moneyMatch?: { value: string; index: number }): string {
   let result = text
   if (moneyMatch) {
@@ -172,7 +180,7 @@ function saleItemQueries(text: string, amountMatch: { value: string; index: numb
 }
 
 const TITLE_FILLER = new Set(['the','a','an','of','and','for','my','copy','item','this','dvd','bluray','blu','ray','movie','movies','film','films','game','games','collection','collections','set','edition','complete','season','disc','special','screen','widescreen','full','two','three','four','five','six','seven','eight','nine','one','first','second','third','fourth','fifth','sixth','seventh','eighth','ninth','1','2','3','4','5','6','7','8','9'])
-const SPEECH_TOKEN_EQUIVALENTS: Record<string,string> = { sixth:'6', fifth:'5', fourth:'4', third:'3', second:'2', first:'1', films:'film', movies:'movie' }
+const SPEECH_TOKEN_EQUIVALENTS: Record<string,string> = { zero:'0',one:'1',two:'2',three:'3',four:'4',five:'5',six:'6',seven:'7',eight:'8',nine:'9',ten:'10',sixth:'6',fifth:'5',fourth:'4',third:'3',second:'2',first:'1',films:'film',movies:'movie' }
 
 /**
  * Find short, non-overlapping title spans using distinctive words from currently
@@ -201,7 +209,10 @@ function segmentAgainstInventory(clause: string, data: TrackerData): string[] {
         // Prefer strong title coverage, then short spans. This makes “sixth film”
         // harmless context around the distinctive “laugh out loud” anchors.
         const score = coverage * 10 + precision * 3 + matched.length - (end-start) * 0.08
-        candidates.push({start,end,query:spanCore.join(' '),score,anchorCount:matched.length})
+        const contextWords=words.slice(Math.max(0,start-2),Math.min(words.length,end+3)).map((word)=>SPEECH_TOKEN_EQUIVALENTS[word]??word)
+        const numericCue=/\b\d+\b/.test(normalize(item.title))?contextWords.filter((word)=>/^\d+$/.test(word)):[]
+        const mediaCue=numericCue.length?contextWords.filter((word)=>['film','films','movie','movies'].includes(word)).map(()=> 'movie'):[]
+        candidates.push({start,end,query:[...spanCore,...numericCue,...mediaCue].join(' '),score,anchorCount:matched.length})
       }
     }
   }
@@ -381,7 +392,7 @@ export function analyzeVoiceCommand(text: string, data: TrackerData, commandId: 
     // Strong matches are candidates for sale. Lower-overlap matches remain
     // suggestions only; common words such as “movie collection” must not turn
     // an unrelated title into a saleable match.
-    const ranked = activeItems(data).map((item) => ({ item, score: matchScore(query, item) })).filter((entry) => availableQuantity(data, entry.item) > 0 && entry.score >= 0.82 && queryHasSpecificTitleAnchor(query,entry.item,data)).sort((a, b) => b.score - a.score)
+    const ranked = activeItems(data).map((item) => ({ item, score: saleTitleMatchScore(query, item) })).filter((entry) => availableQuantity(data, entry.item) > 0 && entry.score >= 0.82 && queryHasSpecificTitleAnchor(query,entry.item,data)).sort((a, b) => b.score - a.score)
     const bestScore = ranked[0]?.score ?? 0
     const confident = ranked.filter((entry) => bestScore - entry.score < 0.1)
     const matches = confident.map((entry) => entry.item)

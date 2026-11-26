@@ -20,6 +20,7 @@ describe('voice command interpretation', () => {
       item('ace','Ace Ventura Collection — Pet Detective / When Nature Calls'),
       item('lost','The Lost Boys Collection — The Lost Boys / Lost Boys: The Tribe'),
       item('laugh','The Laugh Out Loud — 6-Movie Collection'),
+      item('laugh-three','Laugh Out Loud 3-Movie Collection'),
     ])
     const before=JSON.stringify(data)
     const result=analyzeVoiceCommand('I sold the Ace Ventura Collection DVD, The Lost Boys Collection DVD, and the Laugh Out Loud Six Movie Collection DVD as a bundle for nine dollars.',data,'voice-bundle-9')
@@ -39,6 +40,7 @@ describe('voice command interpretation', () => {
       item('ace','Ace Ventura Collection — Pet Detective / When Nature Calls'),
       item('lost','The Lost Boys Collection — The Lost Boys: The Tribe'),
       item('laugh','The Laugh Out Loud — 6-Movie Collection'),
+      item('laugh-three','Laugh Out Loud 3-Movie Collection'),
       item('sixth','The Sixth Sense'),
       item('unrelated','Movie Collection: Six Classic Films'),
     ])
