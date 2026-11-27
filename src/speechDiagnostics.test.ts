@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { formatSpeechDiagnosticReport } from './speechDiagnostics'
+import { beginSpeechDiagnosticAttempt, formatSpeechDiagnosticReport, getSpeechDiagnosticAttemptCount, getSpeechDiagnosticEvents, recordSpeechDiagnosticEvent } from './speechDiagnostics'
 
 describe('copyable speech diagnostics', () => {
   it('reports API exposure, standalone mode, current state, errors, and bounded event history without transcripts', () => {
@@ -10,7 +10,7 @@ describe('copyable speech diagnostics', () => {
       phase: 'error',
       interpretationAttempts: 0,
       errorCode: 'network',
-      events: Array.from({ length: 24 }, (_, index) => ({ at: index * 1000, event: `event-${index}`, ...(index === 23 ? { code: 'network' } : {}) })),
+      events: Array.from({ length: 24 }, (_, index) => ({ attempt:1,sessionId:'S1',at: index * 1000, event: `event-${index}`, ...(index === 23 ? { code: 'network' } : {}) })),
     })
     expect(report).toContain('webkitSpeechRecognition')
     expect(report).toContain('Standalone app display: yes')
@@ -24,5 +24,20 @@ describe('copyable speech diagnostics', () => {
 
   it('clearly identifies browsers that do not expose speech recognition', () => {
     expect(formatSpeechDiagnosticReport({ apiAvailable: false, apiName: 'unavailable', standalone: false, phase: 'ready', interpretationAttempts: 0, errorCode: '', events: [] })).toContain('Speech API exposed: no')
+  })
+
+  it('keeps a bounded transcript-free event history across recognition attempts in this app session',()=>{
+    const before=getSpeechDiagnosticEvents().length
+    const first=beginSpeechDiagnosticAttempt(false)
+    recordSpeechDiagnosticEvent(first.attempt,first.sessionId,first.startedAt,'recognition_start')
+    const second=beginSpeechDiagnosticAttempt(true)
+    recordSpeechDiagnosticEvent(second.attempt,second.sessionId,second.startedAt,'audio_start')
+    const events=getSpeechDiagnosticEvents().slice(before)
+    expect(getSpeechDiagnosticAttemptCount()).toBeGreaterThanOrEqual(2)
+    expect(events.map((event)=>event.sessionId)).toEqual([first.sessionId,first.sessionId,second.sessionId,second.sessionId,second.sessionId])
+    expect(events[0].code).toBe('previous_recognizer_registered=no')
+    expect(events[3].code).toBe('previous_recognizer_registered=yes')
+    expect(formatSpeechDiagnosticReport({apiAvailable:true,apiName:'webkitSpeechRecognition',standalone:true,phase:'listening',interpretationAttempts:0,errorCode:'',events}).match(/start_requested_by_tap/g)).toHaveLength(2)
+    expect(JSON.stringify(events)).not.toContain('VI Music')
   })
 })

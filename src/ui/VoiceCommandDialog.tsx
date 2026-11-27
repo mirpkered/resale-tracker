@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { LoaderCircle, Mic, Search, Square, X } from 'lucide-react'
 import type { InventoryItem, LedgerTransaction, Sale, TrackerData } from '../domain'
 import { ACTIVE_STATUSES, dollarsToCents, formatMoney, PLATFORMS } from '../domain'
@@ -8,10 +8,25 @@ import { voiceSaleInitial } from '../quickSaleForm'
 import { canProcessVoiceCommand, interpretVoiceTranscript, searchAvailableInventory, verifyVoiceCommandSession, type VoiceAnalysis, type VoiceSaleTarget } from '../voiceCommand'
 import type { QuickSaleInput } from '../quickSale'
 import { remainingAcquisitionCost } from '../lotView'
-import { attachSpeechLifecycle, browserSpeechRecognitionAvailable, createSpeechCommandSession, type SpeechRecognizer, type SpeechWindow } from '../speechRecognition'
-import { formatSpeechDiagnosticReport, type SpeechDiagnosticEvent } from '../speechDiagnostics'
+import { browserSpeechRecognitionAvailable, createSpeechAttempt, type SpeechWindow } from '../speechRecognition'
+import { beginSpeechDiagnosticAttempt, formatSpeechDiagnosticReport, getSpeechDiagnosticEvents, recordSpeechDiagnosticEvent, type SpeechDiagnosticEvent } from '../speechDiagnostics'
 import { currentFinancialAmount, type FinancialCommandAnalysis, type FinancialCommand } from '../financialVoiceCommand'
 import { localDateInputValue } from '../localDate'
+
+function speechFailureMessage(code:string,audioStarted:boolean,recognitionStarted:boolean):string {
+  if(code==='not-allowed'||code==='service-not-allowed')return 'iPhone denied or could not start its speech-recognition service. Check Microphone and Speech Recognition access for Safari/the installed web app, and make sure Siri is enabled in iPhone Settings. Retry, or use the keyboard microphone in Command.'
+  if(code==='no-speech')return 'The speech service reported that it detected no speech. This can happen even when the microphone indicator appears. Retry after the listening indicator shows, or use keyboard dictation.'
+  if(code==='audio-capture')return 'The browser could not access microphone audio. Check the site’s microphone permission and iPhone privacy settings, then retry or use keyboard dictation.'
+  if(code==='network')return 'The browser speech service could not connect. Resale Tracker does not upload audio. Check connectivity and retry, or use keyboard dictation or typing.'
+  if(code==='language-not-supported')return 'The browser speech service does not support English recognition in this session. Use keyboard dictation or type the command.'
+  if(code==='start-timeout')return 'The speech service did not report that it started. The attempt was cleaned up; you can retry or use keyboard dictation.'
+  if(code==='listening-timeout')return 'The speech service returned no transcript before the listening limit. The attempt was cleaned up; retry or use keyboard dictation.'
+  if(code==='stop-timeout')return 'The speech service did not finish after Stop listening. Any transcript received was kept; otherwise no command was interpreted. Retry or use keyboard dictation.'
+  if(code==='stop-exception')return 'This browser could not finish recognition gracefully. The recording was cancelled safely; retry or use the iPhone keyboard microphone.'
+  if(code==='no-final-transcript')return audioStarted?'The browser started and reported audio capture, but returned no recognized text. The microphone indicator does not prove usable audio reached the speech service. Retry; if this repeats, use the iPhone keyboard microphone in Command or type.':'The speech service ended without returning recognized text. Retry or use the iPhone keyboard microphone in Command.'
+  if(code==='start-exception')return 'The browser could not start speech recognition. Check permissions and retry, or use keyboard dictation.'
+  return recognitionStarted?'Speech recognition ended without a usable transcript. No command was interpreted. Retry or use keyboard dictation or typing.':'The speech service ended before reporting that it started. Retry or use keyboard dictation or typing.'
+}
 export function VoiceCommandDialog({ data, authenticated, verifySession, onClose, onConfirmSale, onConfirmFinancial, onOpenLot }: {
   data: TrackerData
   authenticated: boolean
@@ -22,7 +37,7 @@ export function VoiceCommandDialog({ data, authenticated, verifySession, onClose
   onOpenLot: (lotId: string) => void
 }) {
   const [text, setText] = useState('')
-  const [phase, setPhase] = useState<'ready' | 'starting' | 'listening' | 'transcript_received' | 'interpreting' | 'processing' | 'result' | 'cancelled' | 'error'>('ready')
+  const [phase, setPhase] = useState<'ready' | 'starting' | 'listening' | 'stopping' | 'cancelling' | 'transcript_received' | 'interpreting' | 'processing' | 'result' | 'cancelled' | 'error'>('ready')
   const [analysis, setAnalysis] = useState<VoiceAnalysis | null>(null)
   const [selectedItemId, setSelectedItemId] = useState('')
   const [selectedBundleItemIds, setSelectedBundleItemIds] = useState<Record<number,string>>({})
@@ -33,28 +48,22 @@ export function VoiceCommandDialog({ data, authenticated, verifySession, onClose
   const [error, setError] = useState('')
   const [interimTranscript, setInterimTranscript] = useState('')
   const [finalTranscript, setFinalTranscript] = useState('')
-  const [speechEvents, setSpeechEvents] = useState<SpeechDiagnosticEvent[]>([])
+  const [speechEvents, setSpeechEvents] = useState<SpeechDiagnosticEvent[]>(()=>getSpeechDiagnosticEvents())
+  const [listeningMessage, setListeningMessage] = useState('')
   const [diagnosticsOpen, setDiagnosticsOpen] = useState(false)
   const [diagnosticsCopied, setDiagnosticsCopied] = useState('')
   const [interpretationAttempts, setInterpretationAttempts] = useState(0)
   const [financialAmount, setFinancialAmount] = useState('')
   const [selectedFinancialRecordId, setSelectedFinancialRecordId] = useState('')
   const [financialReceived, setFinancialReceived] = useState(false)
-  const recognitionErrorRef = useRef('')
   const recognitionErrorCodeRef = useRef('')
-  const startWatchdogRef = useRef<number | null>(null)
-  const listenWatchdogRef = useRef<number | null>(null)
-  const finalSettleTimerRef = useRef<number | null>(null)
   const [attempt, setAttempt] = useState(0)
   const [detailsOpen, setDetailsOpen] = useState(true)
-  const recognitionRef = useRef<SpeechRecognizer | null>(null)
-  const lifecycleRef = useRef<ReturnType<typeof attachSpeechLifecycle> | null>(null)
-  const finalReceivedRef = useRef(false)
-  const activeSpeechSessionRef = useRef<ReturnType<typeof createSpeechCommandSession> | null>(null)
-  const speechStartedAtRef = useRef<number | null>(null)
+  const speechAttemptRef = useRef<ReturnType<typeof createSpeechAttempt> | null>(null)
+  const diagnosticAttemptRef = useRef<ReturnType<typeof beginSpeechDiagnosticAttempt> | null>(null)
   const mountedRef = useRef(false)
-  const cancelledRef = useRef(false)
-  const startedRef = useRef(false)
+  const interruptedRef = useRef('')
+  const finalTranscriptSeenRef = useRef(false)
   const onCloseRef = useRef(onClose)
   onCloseRef.current = onClose
   const latestRef = useRef({ data, authenticated, verifySession })
@@ -63,12 +72,10 @@ export function VoiceCommandDialog({ data, authenticated, verifySession, onClose
   const commandIdRef = useRef('')
   const interpretationRef = useRef(0)
   const formRef = useRef<HTMLFormElement>(null)
-  const clearSpeechTimers = useCallback(() => { if(startWatchdogRef.current!==null)window.clearTimeout(startWatchdogRef.current);if(listenWatchdogRef.current!==null)window.clearTimeout(listenWatchdogRef.current);if(finalSettleTimerRef.current!==null)window.clearTimeout(finalSettleTimerRef.current);startWatchdogRef.current=null;listenWatchdogRef.current=null;finalSettleTimerRef.current=null },[])
-
-  const recordSpeechEvent = (event: string, code?: string) => {
-    if (!mountedRef.current) return
-    const start = speechStartedAtRef.current ?? performance.now()
-    setSpeechEvents((previous) => [...previous, { at: Math.max(0, performance.now() - start), event, ...(code ? { code } : {}) }].slice(-20))
+  const recordSpeechEvent = (event: string, code?: string, attemptInfo=diagnosticAttemptRef.current) => {
+    if(!attemptInfo)return
+    const events=recordSpeechDiagnosticEvent(attemptInfo.attempt,attemptInfo.sessionId,attemptInfo.startedAt,event,code)
+    if(mountedRef.current)setSpeechEvents(events)
   }
 
   const speechAvailable = browserSpeechRecognitionAvailable()
@@ -115,13 +122,20 @@ export function VoiceCommandDialog({ data, authenticated, verifySession, onClose
 
   useEffect(() => {
     mountedRef.current = true
+    setSpeechEvents(getSpeechDiagnosticEvents())
     const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape') close() }
-    function close() { recordSpeechEvent('modal_closed');cancelledRef.current = true;activeSpeechSessionRef.current?.cancel();activeSpeechSessionRef.current=null;lifecycleRef.current?.cancel();lifecycleRef.current?.dispose(); lifecycleRef.current = null; recognitionRef.current = null; onCloseRef.current() }
+    const interrupt=()=>{const current=speechAttemptRef.current;if(current?.isActive()){interruptedRef.current='app-backgrounded';current.cancel('app-backgrounded')}}
+    const onVisibility=()=>{if(document.visibilityState==='hidden')interrupt()}
+    const onPageShow=()=>{if(document.visibilityState==='visible'&&interruptedRef.current==='app-backgrounded'){recordSpeechEvent('app_resumed');setPhase('cancelled');setError('Speech was interrupted when the app went to the background. Tap Speak to start a fresh attempt, use the iPhone keyboard microphone, or type.') }}
+    function close() { recordSpeechEvent('dialog_closed');speechAttemptRef.current?.cancel('dialog-closed');onCloseRef.current() }
     const previousOverflow = document.body.style.overflow
     document.body.style.overflow = 'hidden'
     window.addEventListener('keydown', onKey)
-    return () => { mountedRef.current = false;window.removeEventListener('keydown', onKey); clearSpeechTimers(); activeSpeechSessionRef.current?.cancel();activeSpeechSessionRef.current=null;lifecycleRef.current?.cancel();lifecycleRef.current?.dispose(); lifecycleRef.current = null; recognitionRef.current = null; document.body.style.overflow = previousOverflow }
-  }, [clearSpeechTimers])
+    document.addEventListener('visibilitychange',onVisibility)
+    window.addEventListener('pagehide',interrupt)
+    window.addEventListener('pageshow',onPageShow)
+    return () => { mountedRef.current = false;window.removeEventListener('keydown', onKey);document.removeEventListener('visibilitychange',onVisibility);window.removeEventListener('pagehide',interrupt);window.removeEventListener('pageshow',onPageShow);speechAttemptRef.current?.cancel('dialog-unmounted');speechAttemptRef.current=null;document.body.style.overflow = previousOverflow }
+  }, [])
 
   const interpretTranscript = async (value: string) => {
     const commandText = value.trim()
@@ -156,113 +170,143 @@ export function VoiceCommandDialog({ data, authenticated, verifySession, onClose
     }
   }
 
-  const finalizeTranscript = (session: ReturnType<typeof createSpeechCommandSession>) => {
-    if (activeSpeechSessionRef.current !== session || cancelledRef.current) return false
-    const transcript = session.complete()?.trim()
-    if (!transcript) return false
-    finalizeCompletedTranscript(transcript)
-    return true
-  }
-
   function finalizeCompletedTranscript(transcript: string) {
     const value = transcript.trim()
-    if (!value || cancelledRef.current) return
-    finalReceivedRef.current = true
+    if (!value) return
     setFinalTranscript(value);setInterimTranscript('');setText(value)
     setAttempt((previous) => previous + 1);setAnalysis(null);setSelectedItemId('');setSelectedBundleItemIds({})
-    commandIdRef.current = `voice-${crypto.randomUUID()}`
+    commandIdRef.current = 'voice-' + crypto.randomUUID()
     recordSpeechEvent('automatic_interpretation_attempted');setInterpretationAttempts((previous) => previous + 1)
     void interpretTranscript(value)
   }
 
   const startListening = () => {
-    if (recognitionRef.current || activeSpeechSessionRef.current?.isActive()) return
+    const previousRegistered = Boolean(speechAttemptRef.current)
+    if (speechAttemptRef.current?.isActive()) {
+      recordSpeechEvent('new_attempt_blocked_previous_active')
+      return
+    }
+    if (speechAttemptRef.current) {
+      speechAttemptRef.current = null
+      recordSpeechEvent('stale_recognizer_reference_cleared')
+    }
+    const diagnostic = beginSpeechDiagnosticAttempt(previousRegistered)
+    diagnosticAttemptRef.current = diagnostic
+    setSpeechEvents(getSpeechDiagnosticEvents())
+    setDiagnosticsCopied('')
+    setListeningMessage('')
+    interruptedRef.current = ''
     interpretationRef.current++
-    setError(''); recognitionErrorRef.current='';recognitionErrorCodeRef.current='';commandIdRef.current='';setAnalysis(null); setSelectedItemId(''); finalReceivedRef.current = false
+    setError('');recognitionErrorCodeRef.current='';commandIdRef.current=''
+    setAnalysis(null);setSelectedItemId('');setSelectedBundleItemIds({})
     setInterimTranscript('');setFinalTranscript('')
-    if (!canProcessVoiceCommand(authenticated)) { setPhase('error'); setError('Your private session is unavailable. Sign in again before using inventory commands.'); return }
-    if (recognitionRef.current) return
+
+    if (!canProcessVoiceCommand(authenticated)) {
+      recognitionErrorCodeRef.current='session-unavailable'
+      recordSpeechEvent('session_check_failed','application')
+      setPhase('error')
+      setError('Your private session is unavailable. Sign in again before using inventory commands.')
+      return
+    }
+
     const speechWindow = window as SpeechWindow
     const SpeechRecognition = speechWindow.SpeechRecognition ?? speechWindow.webkitSpeechRecognition
-    if (!SpeechRecognition) { recognitionErrorCodeRef.current='api-unavailable';setPhase('error'); setError('This browser does not expose speech transcription. You can still type, or use the iPhone keyboard microphone if available.'); return }
+    if (!SpeechRecognition) {
+      recognitionErrorCodeRef.current='api-unavailable'
+      recordSpeechEvent('recognition_api_unavailable','application')
+      setPhase('error')
+      setError('This browser does not expose speech transcription. Use the iPhone keyboard microphone in the Command field if available, or type.')
+      return
+    }
+
     try {
+      const standalone=window.matchMedia?.('(display-mode: standalone)').matches===true||(navigator as Navigator&{standalone?:boolean}).standalone===true
+      recordSpeechEvent('recognition_api_available',(speechWindow.SpeechRecognition?'SpeechRecognition':'webkitSpeechRecognition')+';standalone='+(standalone?'yes':'no'))
       const recognition = new SpeechRecognition()
-      const speechSession = createSpeechCommandSession()
-      activeSpeechSessionRef.current = speechSession
-      recognition.lang = 'en-US'; recognition.continuous = false; recognition.interimResults = true
-      cancelledRef.current = false
-      startedRef.current = false
-      speechStartedAtRef.current=performance.now()
-      setSpeechEvents([{at:0,event:'start_requested_by_tap'}]);setDiagnosticsCopied('')
-      const lifecycle = attachSpeechLifecycle(recognition, {
-      onResult: (event) => {
-        if(cancelledRef.current || !mountedRef.current || activeSpeechSessionRef.current !== speechSession || !speechSession.isActive())return
-        const result=speechSession.update(event)
-        if(!result)return
-        setInterimTranscript(result.interimTranscript);setFinalTranscript(result.finalTranscript)
-        const visible=[result.finalTranscript,result.interimTranscript].filter(Boolean).join(' ').trim()
-        if(visible)setText(visible)
-        if(result.finalTranscript){
-          finalReceivedRef.current=true;setPhase('transcript_received');recordSpeechEvent('final_result_received')
-          if(finalSettleTimerRef.current!==null)window.clearTimeout(finalSettleTimerRef.current)
-          finalSettleTimerRef.current=window.setTimeout(()=>{finalSettleTimerRef.current=null;finalizeTranscript(speechSession)},900)
-        } else if(result.interimTranscript) recordSpeechEvent('interim_result_received')
-      },
-      onError: (errorCode) => {
-        if (cancelledRef.current || activeSpeechSessionRef.current !== speechSession || !speechSession.isActive()) return
-        recognitionErrorCodeRef.current=errorCode
-        recordSpeechEvent('recognition_error',errorCode)
-        const reasons: Record<string, string> = {
-          'not-allowed': 'The browser denied speech recognition. Check microphone and speech-recognition permission for Safari in iPhone Settings, then retry. Keyboard dictation and typing remain available.',
-          'service-not-allowed': 'The browser exposed speech recognition, but its speech service refused the request. This is a browser/service limitation; retry later or use keyboard dictation or typing.',
-          'no-speech': 'No speech was detected. Tap Speak and begin talking after the listening indicator appears, or use keyboard dictation.',
-          'audio-capture': 'The microphone is unavailable to this browser. Check microphone permission, then retry or use keyboard dictation.',
-          network: 'The browser speech service could not connect. Resale Tracker does not upload audio; retry with a connection or use keyboard dictation or typing.',
-          'language-not-supported': 'English speech recognition is unavailable here. Use keyboard dictation or type the command.',
-        }
-        const reason = reasons[errorCode] ?? 'Speech recognition ended unexpectedly. Try again or use the microphone on the iPhone keyboard to dictate into the command box.'
-        recognitionErrorRef.current = reason
-        if(!finalReceivedRef.current){setPhase('error');setError(reason)}
-      },
-      onStart: () => { if(cancelledRef.current || !mountedRef.current || activeSpeechSessionRef.current!==speechSession)return;recordSpeechEvent('recognition_start');startedRef.current=true;if(startWatchdogRef.current!==null)window.clearTimeout(startWatchdogRef.current);startWatchdogRef.current=null;listenWatchdogRef.current=window.setTimeout(()=>{if(activeSpeechSessionRef.current!==speechSession)return;recognitionErrorCodeRef.current='listening-timeout';recordSpeechEvent('listening_timeout');setError('Listening timed out without a completed transcript. iPhone may expose the API without returning speech. Retry, use keyboard dictation, or type.');setPhase('error');clearSpeechTimers();cancelledRef.current=true;speechSession.cancel();activeSpeechSessionRef.current=null;lifecycleRef.current?.cancel();lifecycleRef.current?.dispose();lifecycleRef.current=null;recognitionRef.current=null},45000);setPhase('listening') },
-      onAudioStart: () => { if(activeSpeechSessionRef.current!==speechSession||!speechSession.isActive())return;recordSpeechEvent('audio_start');if (!finalReceivedRef.current && mountedRef.current) setPhase('listening') },
-      onAudioEnd: () => {if(activeSpeechSessionRef.current===speechSession)recordSpeechEvent('audio_end')},
-      onSpeechStart: () => {if(activeSpeechSessionRef.current!==speechSession||!speechSession.isActive())return;recordSpeechEvent('speech_start');if(mountedRef.current)setPhase('listening')},
-      onSpeechEnd: () => {if(activeSpeechSessionRef.current===speechSession)recordSpeechEvent('speech_end')},
-      onNoMatch: () => {if(activeSpeechSessionRef.current===speechSession)recordSpeechEvent('no_match')},
-      onEnd: ({ cancelled, started, hasResult }) => {
-        if (activeSpeechSessionRef.current !== speechSession) return
-        recordSpeechEvent('recognition_end',hasResult?'final-result-present':'no-final-result')
-        clearSpeechTimers()
-        recognitionRef.current = null
-        lifecycleRef.current = null
-        if(!mountedRef.current)return
-        if (cancelled || cancelledRef.current) { speechSession.cancel();activeSpeechSessionRef.current=null;if(recognitionErrorRef.current){setPhase('error');setError(recognitionErrorRef.current)}else setPhase('cancelled');return }
-        const transcript=speechSession.complete()
-        activeSpeechSessionRef.current = null
-        if(transcript){setPhase('transcript_received');finalizeCompletedTranscript(transcript);return}
-        if(speechSession.isCompleted())return
-        if (hasResult || finalReceivedRef.current) return
-        if (!recognitionErrorCodeRef.current) recognitionErrorCodeRef.current='no-final-transcript'
-        setPhase('error')
-        setError(recognitionErrorRef.current || (started || startedRef.current ? 'The browser started, but ended without a final transcript. A microphone indicator confirms audio capture, not speech transcription. In iPhone standalone mode, retry or use the keyboard microphone in the Command field; typing also works.' : 'The speech service ended before reporting start. Check Safari microphone permission, retry, or use keyboard dictation or typing.'))
-      },
+      recognition.lang='en-US';recognition.continuous=false;recognition.interimResults=true
+      const ownedAttempt = createSpeechAttempt(recognition, {
+        onState: (next) => {
+          if(!mountedRef.current || speechAttemptRef.current!==ownedAttempt)return
+          setPhase(next)
+          if(next==='starting')setListeningMessage('Starting the browser speech service…')
+          else if(next==='listening')setListeningMessage('Recognition started. Waiting for the browser to report audio and recognized words.')
+          else if(next==='stopping')setListeningMessage('Stop requested. The browser is finishing recognition for speech already captured.')
+          else if(next==='cancelling')setListeningMessage('Cancelling recording. This attempt will not be interpreted.')
+        },
+        onEvent: (event, code) => {
+          if(speechAttemptRef.current===ownedAttempt&&(event==='browser_error'||event==='application_timeout'||event==='start_threw'||event==='stop_threw'))recognitionErrorCodeRef.current=code??event
+          if(mountedRef.current&&speechAttemptRef.current===ownedAttempt&&event==='audio_start')setListeningMessage('The browser reports audio capture. This does not confirm that its speech service is returning words.')
+          if(mountedRef.current&&speechAttemptRef.current===ownedAttempt&&event==='speech_start')setListeningMessage('The browser reports speech activity. Waiting for recognized words.')
+          recordSpeechEvent(event,code,diagnostic)
+        },
+        onTranscript: ({finalTranscript,interimTranscript}) => {
+          if(!mountedRef.current || speechAttemptRef.current!==ownedAttempt)return
+          setFinalTranscript(finalTranscript);setInterimTranscript(interimTranscript)
+          const visible=[finalTranscript,interimTranscript].filter(Boolean).join(' ').trim()
+          if(visible)setText(visible)
+          if(finalTranscript){finalTranscriptSeenRef.current=true;setPhase('transcript_received')}
+          else if(interimTranscript)recordSpeechEvent('interim_transcript_displayed')
+        },
+        onNoTranscript: () => {
+          if(!mountedRef.current || speechAttemptRef.current!==ownedAttempt)return
+          setListeningMessage('No recognized words have arrived yet. You can keep listening, stop so the browser can finish, or cancel this recording.')
+        },
+        onComplete: (result) => {
+          if(speechAttemptRef.current===ownedAttempt)speechAttemptRef.current=null
+          if(!mountedRef.current)return
+          setListeningMessage('')
+          if(result.cancelled){
+            if(interruptedRef.current){
+              const reason=interruptedRef.current
+              interruptedRef.current=''
+              recordSpeechEvent('attempt_cancelled',reason)
+              setPhase('cancelled')
+              setError('Speech was interrupted because the app '+(reason==='app-backgrounded'?'went to the background':'closed')+'. No command was interpreted. Tap Speak to start fresh, use the iPhone keyboard microphone, or type.')
+            }else{
+              setPhase('cancelled')
+              setError('Recording cancelled. No command was interpreted. Retry, use the iPhone keyboard microphone, or type.')
+            }
+            return
+          }
+          if(result.transcript){
+            finalTranscriptSeenRef.current=true
+            setFinalTranscript(result.transcript);setInterimTranscript('');setText(result.transcript)
+            setPhase('transcript_received')
+            finalizeCompletedTranscript(result.transcript)
+            return
+          }
+          const failureCode=result.code??recognitionErrorCodeRef.current??'no-final-transcript'
+          recognitionErrorCodeRef.current=failureCode
+          recordSpeechEvent('attempt_failed',failureCode)
+          setPhase('error')
+          setError(speechFailureMessage(failureCode,result.audioStarted,result.recognitionStarted))
+        },
       })
-      recognitionRef.current = recognition
-      lifecycleRef.current = lifecycle
-      setPhase('starting')
-      // WebKit requires start() directly in the user's tap handler. Do not await
-      // network/session work before consuming the gesture; session is verified
-      // before interpretation and again before any confirmed sale.
-      startWatchdogRef.current=window.setTimeout(()=>{if(activeSpeechSessionRef.current!==speechSession)return;recognitionErrorCodeRef.current='start-timeout';recognitionErrorRef.current='The browser did not report recognition start within 10 seconds.';recordSpeechEvent('start_timeout');setError(`${recognitionErrorRef.current} Check Safari permission or use keyboard dictation.`);setPhase('error');clearSpeechTimers();cancelledRef.current=true;speechSession.cancel();activeSpeechSessionRef.current=null;lifecycleRef.current?.cancel();lifecycleRef.current?.dispose();lifecycleRef.current=null;recognitionRef.current=null},10000)
-      lifecycle.start()
+      speechAttemptRef.current=ownedAttempt
+      ownedAttempt.start()
     } catch (cause) {
-      recognitionErrorCodeRef.current='start-exception';recordSpeechEvent('start_threw');clearSpeechTimers();activeSpeechSessionRef.current?.cancel();activeSpeechSessionRef.current=null;lifecycleRef.current?.cancel(); lifecycleRef.current = null; recognitionRef.current = null; setPhase('error')
-      setError(cause instanceof Error ? `${cause.message} Check microphone permission, retry, or use iPhone keyboard dictation.` : 'Speech recognition could not start. Check microphone permission or use iPhone keyboard dictation.')
+      recognitionErrorCodeRef.current='start-exception'
+      recordSpeechEvent('start_threw','application')
+      setPhase('error')
+      setError(cause instanceof Error ? 'The browser could not start speech recognition (' + cause.message + '). Check microphone permission, retry, or use iPhone keyboard dictation.' : 'Speech recognition could not start. Check microphone permission or use iPhone keyboard dictation.')
     }
   }
 
-  const cancelListening = () => { recordSpeechEvent('cancelled_by_user');cancelledRef.current = true;recognitionErrorRef.current='';recognitionErrorCodeRef.current='';clearSpeechTimers();activeSpeechSessionRef.current?.cancel();activeSpeechSessionRef.current=null;lifecycleRef.current?.cancel();lifecycleRef.current?.dispose(); lifecycleRef.current = null; recognitionRef.current = null; setError(''); setPhase('cancelled') }
+  const stopListening = () => {
+    const current=speechAttemptRef.current
+    if(!current?.isActive())return
+    setError('')
+    current.stop()
+  }
+
+  const cancelListening = () => {
+    const current=speechAttemptRef.current
+    if(!current?.isActive())return
+    interruptedRef.current=''
+    recognitionErrorCodeRef.current=''
+    setError('')
+    current.cancel('user')
+  }
   const chooseItem = (item: InventoryItem) => {
     setSelectedItemId(item.id)
     setSelectedBundleItemIds((previous)=>({...previous,0:item.id}))
@@ -316,7 +360,7 @@ export function VoiceCommandDialog({ data, authenticated, verifySession, onClose
   }
 
   const previewValues = command && resolvedItem ? voiceSaleInitial(command, resolvedItem) : undefined
-  const closeDialog = () => { recordSpeechEvent('modal_closed');cancelledRef.current = true; clearSpeechTimers();activeSpeechSessionRef.current?.cancel();activeSpeechSessionRef.current=null;lifecycleRef.current?.cancel();lifecycleRef.current?.dispose(); lifecycleRef.current = null; recognitionRef.current = null; onCloseRef.current() }
+  const closeDialog = () => { recordSpeechEvent('dialog_closed');speechAttemptRef.current?.cancel('dialog-closed');onCloseRef.current() }
   const speechWindow = window as SpeechWindow
   const speechApiName = speechWindow.SpeechRecognition ? 'SpeechRecognition' : speechWindow.webkitSpeechRecognition ? 'webkitSpeechRecognition' : 'unavailable'
   const standalone = window.matchMedia?.('(display-mode: standalone)').matches === true || (navigator as Navigator & { standalone?: boolean }).standalone === true
@@ -331,6 +375,7 @@ export function VoiceCommandDialog({ data, authenticated, verifySession, onClose
     } catch { setDiagnosticsCopied('Could not access the clipboard. Select and copy the diagnostic details instead.') }
   }
   const busy = phase === 'processing' || phase === 'interpreting'
+  const speechBusy = phase === 'starting' || phase === 'listening' || phase === 'stopping' || phase === 'cancelling' || phase === 'transcript_received'
   const phaseLabel = phase === 'ready' ? 'Ready' : phase.replaceAll('_',' ')
 
   return <div className="modal-backdrop voice-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) closeDialog() }} onFocusCapture={(event) => { const target = event.target; if (target instanceof HTMLElement && target.matches('input,select,textarea')) window.setTimeout(() => target.scrollIntoView({ block: 'nearest', behavior: 'smooth' }), 150) }}>
@@ -338,18 +383,19 @@ export function VoiceCommandDialog({ data, authenticated, verifySession, onClose
       <header><div><span className="eyebrow">PRIVATE INVENTORY COMMAND</span><h2 id="voice-dialog-title">Voice command</h2></div><button className="icon-button" aria-label="Close voice command" onClick={closeDialog}><X size={19}/></button></header>
       <p id="voice-dialog-help" className="voice-privacy-note">Speech is processed by your browser and may use its speech service. Resale Tracker does not save raw audio or send your inventory for transcription. Typed commands stay on this device.</p>
       <div className="voice-input-actions">
-        {speechAvailable ? <button className={`primary voice-mic ${phase === 'listening' ? 'listening' : ''}`} disabled={busy} onClick={phase === 'listening' || phase === 'starting' ? cancelListening : startListening}>{phase === 'starting' ? 'Cancel starting' : phase === 'listening' ? <><Square size={16}/> Stop listening</> : phase === 'interpreting' ? 'Interpreting…' : <><Mic size={17}/> Speak command</>}</button> : <span className="voice-unavailable">This browser does not provide speech transcription. Use the iPhone keyboard microphone in the Command field if available, or type.</span>}
-        {(phase === 'starting' || phase === 'listening')&&<span className="listening-indicator" role="status"><i/>{phase === 'starting' ? 'Starting speech service…' : 'Listening for speech'}</span>}
+        {speechAvailable && <button className={`primary voice-mic ${phase === 'listening' || phase === 'transcript_received' ? 'listening' : ''}`} disabled={busy || phase === 'stopping' || phase === 'cancelling'} onClick={phase === 'starting' ? cancelListening : phase === 'listening' || phase === 'transcript_received' ? stopListening : startListening}>{phase === 'starting' ? 'Cancel starting' : phase === 'listening' ? <><Square size={16}/> Stop listening</> : phase === 'transcript_received' ? 'Finish recognition' : phase === 'stopping' ? 'Finishing…' : phase === 'cancelling' ? 'Cancelling…' : busy ? 'Interpreting…' : <><Mic size={17}/> Speak command</>}</button>}
+        {(phase === 'starting' || phase === 'listening' || phase === 'stopping' || phase === 'cancelling' || phase === 'transcript_received')&&<span className="listening-indicator" role="status"><i/>{listeningMessage|| (phase==='starting'?'Starting speech service…':phase==='listening'?'Listening for speech':phase==='stopping'?'Finishing recognition…':phase==='cancelling'?'Cancelling recording…':'Transcript received; finishing recognition…')}</span>}
+        {(phase === 'listening' || phase === 'transcript_received' || phase === 'stopping')&&<button className="secondary voice-cancel" type="button" onClick={cancelListening}>Cancel recording</button>}
       </div>
-      <label className="voice-command-label">Command<textarea value={text} disabled={phase==='starting'||phase==='listening'||busy} onChange={(event) => { interpretationRef.current++;commandIdRef.current='';setText(event.currentTarget.value);setInterimTranscript('');setFinalTranscript('');setAttempt((value) => value + 1);setAnalysis(null);setSelectedItemId('');setSelectedBundleItemIds({});setSelectedFinancialRecordId('');setFinancialAmount('');setError('');setPhase('ready') }} rows={2} placeholder="Sold VI Music for ten dollars on Vinted."/><small>The command stays in this field. On iPhone, use the keyboard microphone to dictate here whenever Speak command is unavailable.</small></label>
+      <label className="voice-command-label">Command<textarea value={text} disabled={speechBusy||busy} onChange={(event) => { interpretationRef.current++;commandIdRef.current='';setText(event.currentTarget.value);setInterimTranscript('');setFinalTranscript('');setAttempt((value) => value + 1);setAnalysis(null);setSelectedItemId('');setSelectedBundleItemIds({});setSelectedFinancialRecordId('');setFinancialAmount('');setError('');setPhase('ready') }} rows={2} placeholder="Sold VI Music for ten dollars on Vinted."/><small>The command stays in this field. On iPhone, use the keyboard microphone to dictate here whenever Speak command is unavailable.</small></label>
       {(interimTranscript || finalTranscript) && <div className="speech-transcript-status" aria-live="polite">{interimTranscript&&<div><span>Interim transcript</span><b>{interimTranscript}</b></div>}{finalTranscript&&<div><span>Final transcript</span><b>{finalTranscript}</b></div>}</div>}
       <details className="speech-diagnostics" open={diagnosticsOpen} onToggle={(event)=>setDiagnosticsOpen(event.currentTarget.open)}>
         <summary>Speech diagnostics</summary>
         <div className="speech-diagnostic-grid"><div><span>Browser API</span><b>{speechAvailable?`${speechApiName} exposed`:'Not exposed'}</b><small>API exposure does not guarantee an iOS speech service will return text.</small></div><div><span>App display</span><b>{standalone?'Home Screen / standalone':'Browser tab'}</b></div><div><span>Current state</span><b>{phaseLabel}</b></div><div><span>Automatic interpretation</span><b>{interpretationAttempts ? `Attempted ${interpretationAttempts} time${interpretationAttempts===1?'':'s'}` : 'Not attempted'}</b></div><div><span>Last error code</span><b>{recognitionErrorCodeRef.current||'None'}</b></div></div>
-        {speechEvents.length>0&&<ul className="speech-diagnostic-events" aria-label="Recent browser speech events">{speechEvents.slice(-12).map((event,index)=><li key={`${event.at}-${event.event}-${index}`}><span>+{(event.at/1000).toFixed(1)}s</span><b>{event.event}</b>{event.code&&<em>{event.code}</em>}</li>)}</ul>}
+        {speechEvents.length>0&&<ul className="speech-diagnostic-events" aria-label="Recent browser speech events">{speechEvents.slice(-12).map((event,index)=><li key={`${event.sessionId}-${event.at}-${event.event}-${index}`}><span>{event.sessionId} +{(event.at/1000).toFixed(1)}s</span><b>{event.event}</b>{event.code&&<em>{event.code}</em>}</li>)}</ul>}
         <div className="speech-diagnostic-actions"><button type="button" className="secondary" onClick={()=>void copyDiagnostics()}>Copy diagnostics</button><small>{diagnosticsCopied||'Copied report omits transcript, inventory, account details, and tokens. Nothing is transmitted.'}</small></div>
       </details>
-      <div className="voice-interpret-actions"><button className="secondary" disabled={busy || phase === 'starting' || phase === 'listening' || !text.trim() || Boolean(analysis)} onClick={() => void interpretTranscript(text)}>{phase === 'processing' || phase === 'interpreting' ? <><LoaderCircle size={16} className="spin"/> Interpreting command…</> : <><Search size={16}/> Interpret command</>}</button><span>{phase === 'error' ? 'Action needed' : phase === 'starting' ? 'Starting recognition' : phase === 'listening' ? 'Listening' : phase === 'transcript_received' ? 'Transcript received' : phase === 'interpreting' || phase === 'processing' ? 'Checking inventory' : analysis?'Review the proposal below':phase==='cancelled'?'Listening cancelled':'Ready'}</span></div>
+      <div className="voice-interpret-actions"><button className="secondary" disabled={busy || speechBusy || !text.trim() || Boolean(analysis)} onClick={() => void interpretTranscript(text)}>{phase === 'processing' || phase === 'interpreting' ? <><LoaderCircle size={16} className="spin"/> Interpreting command…</> : <><Search size={16}/> Interpret command</>}</button><span>{phase === 'error' ? 'Action needed' : phase === 'starting' ? 'Starting recognition' : phase === 'listening' ? 'Listening' : phase === 'stopping' ? 'Finishing recognition' : phase === 'cancelling' ? 'Cancelling recording' : phase === 'transcript_received' ? 'Transcript received' : phase === 'interpreting' || phase === 'processing' ? 'Checking inventory' : analysis?'Review the proposal below':phase==='cancelled'?'Listening cancelled':'Ready'}</span></div>
       {error&&<div className="voice-error" role="alert">{error}</div>}
       {analysis?.kind === 'read_only'&&<section className="voice-result"><h3>Inventory result</h3><p>{analysis.response}</p>{choices.length>0&&<VoiceItemChoices items={choices} data={data} selectedId={selectedItemId} openOnly onChoose={(item)=>onOpenLot(item.lotId??'__standalone__')}/>}</section>}
       {analysis?.kind === 'unsupported'&&<div className="voice-error" role="status">{analysis.message}</div>}
